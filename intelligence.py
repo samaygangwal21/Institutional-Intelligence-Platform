@@ -240,8 +240,15 @@ def discover_connections(ticker: str, sb: Client):
     fetcher = SEC8KFetcher(meta["cik"], ticker)
     for f in fetcher.get_8k_filings():
         try:
-            text = requests.get(f["url"], headers=SEC_HEADERS, timeout=15).text[:5000]
-        except Exception:
+            resp = requests.get(f["url"], headers=SEC_HEADERS, timeout=15)
+            text = resp.text[:5000]
+            
+            # Archive the raw 8-K filing to Azure
+            from utils import upload_to_azure_blob
+            upload_to_azure_blob(resp.content, f"sec_filings/8-K/{ticker}/{f['accn']}.htm")
+            
+        except Exception as e:
+            log.warning(f"Could not fetch or archive 8-K {f['accn']}: {e}")
             continue
         prompt = f"Extract corporate relationships (Acquisitions, Partnerships, etc) for {ticker} from: {text}. Respond ONLY with a JSON array of objects with keys: target_company (string), relationship_type (one of: ACQUISITION, INVESTMENT, PARTNERSHIP, SUPPLIER, CUSTOMER, SUBSIDIARY, JOINT_VENTURE, LICENSING, COMPETITOR, STRATEGIC_ALLIANCE), relationship_detail (string)."
         try:

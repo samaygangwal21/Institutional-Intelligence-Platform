@@ -38,7 +38,8 @@ from platform_config import (
 )
 from utils import (
     FINANCIAL_COLUMNS, ENHANCED_METRIC_MAP, fuzzy_match,
-    build_raw_url, build_sec_ix_url
+    build_raw_url, build_sec_ix_url, upload_to_azure_blob,
+    fetch_page_content
 )
 
 log = logging.getLogger("Ingest")
@@ -103,6 +104,10 @@ def ingest_sec_ticker(ticker: str, meta: dict, sb: Client, matcher: SECDataMatch
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
+        
+        # Archive raw company facts JSON to Azure
+        upload_to_azure_blob(resp.text, f"sec_filings/{ticker}_companyfacts.json")
+        
         data = resp.json().get("facts", {}).get("us-gaap", {})
         
         all_dates = {}
@@ -130,6 +135,20 @@ def ingest_sec_ticker(ticker: str, meta: dict, sb: Client, matcher: SECDataMatch
             row["sec_raw_url"] = build_raw_url(cik, info["accn"])
             row["sec_ix_url"] = build_sec_ix_url(cik, info["accn"])
             row["sec_filing_url"] = row["sec_ix_url"] or row["sec_raw_url"]
+            
+            # Archive individual raw SEC filing to Azure
+            if row.get("sec_ix_url"):
+                try:
+                    # extract true raw path from the ix viewer link
+                    raw_path = row["sec_ix_url"].split("?doc=")[-1]
+                    raw_doc_url = "https://www.sec.gov" + raw_path
+                    time.sleep(0.15) # respect rate limit
+                    doc_resp = requests.get(raw_doc_url, headers=HEADERS, timeout=30)
+                    if doc_resp.ok:
+                        upload_to_azure_blob(doc_resp.content, f"sec_filings/{ticker}_{info['form']}_{d}.htm")
+                except Exception as e:
+                    log.warning(f"Could not archive raw SEC filing for {ticker} {d}: {e}")
+            
             rows.append({k:v for k,v in row.items() if k in LIVE_COLUMNS})
             
         if rows:
@@ -169,7 +188,20 @@ def ingest_news(ticker: str, sb: Client, days: int = 30):
         
         if rows:
             sb.table("market_intelligence").upsert(rows, on_conflict="ticker,headline,published_at").execute()
-            log.info(f"[{ticker}] Ingested {len(rows)} news articles.")
+            
+            # Archive raw Finnhub News Payload to Azure
+            upload_to_azure_blob(json.dumps(articles), f"news/payloads/{ticker}_news_{date.today().isoformat()}.json")
+            
+            # Archive the ENTIRE content for each individual article
+            for row in rows:
+                content = fetch_page_content(row["url"])
+                if content:
+                    # Sanitize headline for filename
+                    safe_headline = re.sub(r'[^\w\s-]', '', row["headline"]).strip().replace(' ', '_')[:60]
+                    file_path = f"news/full_articles/{ticker}/{date.today().isoformat()}_{safe_headline}.html"
+                    upload_to_azure_blob(content, file_path)
+            
+            log.info(f"[{ticker}] Ingested {len(rows)} news articles + archived full content.")
     except Exception as e:
         log.error(f"[{ticker}] News Failed: {e}")
 

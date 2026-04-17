@@ -22,6 +22,10 @@ GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemin
 
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
 
+# ── Azure Blob Storage Config ────────────────────────────────────────────────────────
+AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+AZURE_STORAGE_CONTAINER_NAME = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "financial-uploads")
+
 # ── SEC EDGAR Config ─────────────────────────────────────────────────────────
 SEC_HEADERS = {
     "User-Agent": "Doc-extract-and-report samaygangwal21@gmail.com",

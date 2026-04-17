@@ -132,3 +132,62 @@ def backfill_sec_urls(supabase: Any, table_name: str):
         ix_url = build_sec_ix_url(cik, accn)
         if ix_url:
             supabase.table(table_name).update({"sec_ix_url": ix_url, "sec_filing_url": ix_url}).eq("id", rec["id"]).execute()
+
+
+# ── 3. Azure Blob Storage Utilities ───────────────────────────────────────────
+
+def upload_to_azure_blob(file_bytes_or_str: Any, filename_path: str) -> Optional[str]:
+    """
+    Uploads file content to Azure Blob Storage using the configured connection string.
+    Returns the public URL of the uploaded blob.
+    """
+    from platform_config import AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_CONTAINER_NAME
+    
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_NAME:
+        log.warning("Azure Storage credentials not configured. Skipping upload for: " + filename_path)
+        return None
+        
+    try:
+        from azure.storage.blob import BlobServiceClient
+        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        container_client = blob_service_client.get_container_client(AZURE_STORAGE_CONTAINER_NAME)
+        
+        # Ensure container exists
+        if not container_client.exists():
+            container_client.create_container()
+            
+        # Clean filename path
+        safe_filename = filename_path.replace("\\", "/")
+        
+        blob_client = container_client.get_blob_client(safe_filename)
+        
+        # Encode string to bytes if needed
+        upload_data = file_bytes_or_str.encode('utf-8') if isinstance(file_bytes_or_str, str) else file_bytes_or_str
+            
+        blob_client.upload_blob(upload_data, overwrite=True)
+        log.info(f"Successfully uploaded to Azure Blob: {safe_filename}")
+        return blob_client.url
+    except Exception as e:
+        log.error(f"Failed to upload to Azure Blob Storage ({filename_path}): {e}")
+        return None
+
+
+def fetch_page_content(url: str) -> Optional[bytes]:
+    """
+    Fetches the raw content of a page, following redirects.
+    Useful for getting 'entire' news articles from various sources.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    }
+    try:
+        # Finnhub links redirect to news sources. We follow them.
+        resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        if resp.ok:
+            return resp.content
+        log.warning(f"Failed to fetch content from {url}: {resp.status_code}")
+    except Exception as e:
+        log.error(f"Error fetching page content from {url}: {e}")
+    return None
+
