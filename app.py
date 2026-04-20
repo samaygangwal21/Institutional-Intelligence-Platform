@@ -14,18 +14,18 @@ New in v2:
 ============================================================
 """
 
-import os
-import subprocess
-import streamlit as st # type: ignore
-import pandas as pd # type: ignore
-import plotly.graph_objects as go # type: ignore
-import plotly.express as px # type: ignore
-from supabase import create_client, Client # type: ignore
-from datetime import datetime, date
-import requests # type: ignore
+from typing import List, Dict, Optional, Any, cast
 import hashlib
 import json
-from typing import List, Dict, Optional, Any, cast
+import os
+from pathlib import Path
+from datetime import datetime, date
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import requests
+from supabase import Client
 
 # Consolidated Modules
 import platform_config
@@ -247,58 +247,87 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── Auth Logic ──────────────────────────────────────────────────────────────
+# ── Auth Helpers (Local File-based) ───────────────────────────────────────────
+USERS_FILE = Path("users.txt")
+
+def _hash_pw(pw: str) -> str:
+    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+
+def load_users() -> list[dict]:
+    users: list[dict] = []
+    if USERS_FILE.exists():
+        try:
+            for line in USERS_FILE.read_text(encoding="utf-8").splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 4:
+                    users.append({
+                        "name": parts[0].strip(),
+                        "email": parts[1].strip().lower(),
+                        "password_hash": parts[2].strip(),
+                        "organization": parts[3].strip() if len(parts) > 3 else "Unknown"
+                    })
+        except: pass
+    return users
+
+def register_user(name: str, email: str, password: str):
+    email_l = email.strip().lower()
+    for u in load_users():
+        if u["email"] == email_l:
+            raise ValueError("Email already registered.")
+    
+    pw_hash = _hash_pw(password)
+    line = f"{name}\t{email_l}\t{pw_hash}\tDefault\n"
+    with USERS_FILE.open("a", encoding="utf-8") as f:
+        f.write(line)
+    return {"name": name, "email": email_l}
+
+def login_user(email: str, password: str):
+    email_l = email.strip().lower()
+    hashed = _hash_pw(password)
+    for u in load_users():
+        if u["email"] == email_l and u["password_hash"] == hashed:
+            return u
+    raise ValueError("Invalid email or password.")
+
+# ── Auth UI Implementation ───────────────────────────────────────────────────
 def render_auth():
     st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
     st.title("🗄️ Institutional Intelligence")
     st.markdown("<p style='color:#8b949e; margin-bottom:30px;'>Secure Financial Research & Data Vault</p>", unsafe_allow_html=True)
     
-    auth_tab = st.tabs(["Login", "Sign Up"])
+    auth_mode = st.radio("Select Access Mode", ["Login", "Register"], horizontal=True)
     
-    with auth_tab[0]:
-        with st.form("login_form"):
-            email = st.text_input("Corporate Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Access Platform", use_container_width=True)
-            if submitted:
-                handle_login(email, password)
+    if auth_mode == "Login":
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        if st.button("Enter Platform", use_container_width=True):
+            try:
+                user = login_user(email, password)
+                st.session_state.user = user
+                st.success(f"Welcome back, {user['name']}!")
+                st.rerun()
+            except Exception as e:
+                st.error(str(e))
                 
-    with auth_tab[1]:
-        with st.form("signup_form"):
-            email = st.text_input("Corporate Email")
-            pwd = st.text_input("Password", type="password")
-            confirm = st.text_input("Confirm Password", type="password")
-            submitted = st.form_submit_button("Create Account", use_container_width=True)
-            if submitted:
-                if pwd != confirm:
-                    st.error("Passwords do not match.")
-                else:
-                    handle_signup(email, pwd)
+    else:
+        name = st.text_input("Full Name")
+        email = st.text_input("Email")
+        pwd = st.text_input("Password", type="password")
+        confirm = st.text_input("Confirm Password", type="password")
+        if st.button("Create Account", use_container_width=True):
+            if not name or not email or not pwd:
+                st.error("All fields are required.")
+            elif pwd != confirm:
+                st.error("Passwords do not match.")
+            else:
+                try:
+                    register_user(name, email, pwd)
+                    st.success("Registration successful! You can now switch to Login.")
+                except Exception as e:
+                    st.error(str(e))
     st.markdown("</div>", unsafe_allow_html=True)
 
-def handle_login(email, password):
-    sb = get_supabase()
-    try:
-        res = sb.auth.sign_in_with_password({"email": email, "password": password})
-        if res.user:
-            st.session_state.user = res.user
-            st.success("Access Granted.")
-            st.rerun()
-    except Exception as e:
-        st.error(f"Login Failed: {str(e)}")
-
-def handle_signup(email, password):
-    sb = get_supabase()
-    try:
-        res = sb.auth.sign_up({"email": email, "password": password})
-        if res.user:
-            st.info("Account created. Please check your email for verification before logging in.")
-    except Exception as e:
-        st.error(f"Signup Failed: {str(e)}")
-
 def handle_logout():
-    sb = get_supabase()
-    sb.auth.sign_out()
     if "user" in st.session_state:
         del st.session_state.user
     st.rerun()
