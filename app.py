@@ -41,6 +41,15 @@ from utils import build_sec_ix_url, backfill_sec_urls
 TARGET_COMPANIES = load_target_companies()
 TARGET_TICKERS = list(TARGET_COMPANIES.keys())
 
+def load_uploaded_docs(ticker: str) -> List[Dict]:
+    sb = get_supabase()
+    try:
+        res = sb.table("extracted_documents").select("*").eq("ticker", ticker).order("created_at", ascending=False).execute()
+        return res.data or []
+    except:
+        return []
+
+
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Institutional Intelligence",
@@ -475,15 +484,14 @@ if view == "📊 Financial Overview":
     col_hdr, col_btn = st.columns([3, 1])
     with col_btn:
         if st.button("🔄 Fetch Latest Financials", use_container_width=True, key="fetch_financials_btn"):
-            with st.spinner("⏳ Running financial ingestor for all companies…"):
-                try:
-                    subprocess.run(
-                        ["python", "financial_ingestor.py", "--ticker", ticker],
-                        check=False, timeout=120,
-                    )
-                    st.success("✅ Financial data refreshed successfully!")
-                except Exception as e:
-                    st.error(f"Ingestor error: {e}")
+            try:
+                # Updated to point to the consolidated ingest.py
+                subprocess.run(
+                    ["python", "ingest.py", "--ticker", ticker, "--sec-only"],
+                    check=False, timeout=120,
+                )
+            except Exception as e:
+                st.error(f"Ingestor error: {e}")
             st.cache_data.clear()
             st.rerun()
 
@@ -582,6 +590,17 @@ if view == "📊 Financial Overview":
                color:#79c0ff; padding:9px 20px; border-radius:8px; text-decoration:none;
                font-size:13px; font-weight:600;'>
                 📄 OPEN ORIGINAL SEC FILING ↗
+            </a>
+        </div>""", unsafe_allow_html=True)
+    
+    archived_url = latest_fin.get("archived_url")
+    if archived_url:
+        st.markdown(f"""
+        <div style='margin-top:8px;'>
+            <a href='{archived_url}' target='_blank' style='background:#1a4731; border:1px solid #3fb950;
+               color:#aff5b4; padding:9px 20px; border-radius:8px; text-decoration:none;
+               font-size:13px; font-weight:600;'>
+                🏦 VIEW IN VAULT (SIGNED) ↗
             </a>
         </div>""", unsafe_allow_html=True)
 
@@ -842,15 +861,13 @@ elif view == "📰 Intelligence Feed":
     feed_col, btn_col = st.columns([3, 1])
     with btn_col:
         if st.button("📰 Refresh News", use_container_width=True, key="refresh_news_btn"):
-            with st.spinner("⏳ Fetching latest news from Finnhub…"):
-                try:
-                    subprocess.run(
-                        ["python", "ingest.py", "--ticker", ticker, "--news-only"],
-                        check=False, timeout=120,
-                    )
-                    st.success("✅ News feed refreshed!")
-                except Exception as e:
-                    st.error(f"News refresh error: {e}")
+            try:
+                subprocess.run(
+                    ["python", "ingest.py", "--ticker", ticker, "--news-only"],
+                    check=False, timeout=120,
+                )
+            except Exception as e:
+                st.error(f"News refresh error: {e}")
             st.cache_data.clear()
             st.rerun()
 
@@ -898,6 +915,9 @@ elif view == "📰 Intelligence Feed":
             pub_dt = item.get("published_at", "")[:10]
             url = item.get("url", "")
             headline = item.get("headline", "")
+            archived_url = item.get("archived_url", "")
+            
+            vault_link = f' · <a href="{archived_url}" target="_blank" style="color:#3fb950; font-weight:700;">🏦 VAULT ↗</a>' if archived_url else ""
             source   = item.get("source", "")
             summary  = item.get("summary", "")[:200]
 
@@ -1166,6 +1186,30 @@ elif view == "📥 Document Extractor":
                     "rejected_rows": result.get("rejected", {})
                 })
 
+    # NEW: VAULT BROWSER
+    st.markdown("<div class='section-header'>📂 VAULTED INTELLIGENCE BROWSER</div>", unsafe_allow_html=True)
+    uploaded_docs = load_uploaded_docs(ticker)
+    
+    if not uploaded_docs:
+        st.info("No vaulted documents found for this ticker.")
+    else:
+        doc_df = pd.DataFrame(uploaded_docs)
+        doc_df = doc_df[["source_url", "source_type", "created_at", "archived_url"]]
+        doc_df.columns = ["Source", "Type", "Date", "Vault Link"]
+        
+        st.dataframe(
+            doc_df,
+            use_container_width=True,
+            column_config={
+                "Vault Link": st.column_config.LinkColumn(
+                    "🏦 Vault Link",
+                    help="Secure link to the archived document in Azure",
+                    display_text="View in Vault ↗"
+                ),
+                "Source": st.column_config.TextColumn("Source", width="medium"),
+            }
+        )
+
 # ════════════════════════════════════════════════════════════
 # VIEW 8: REPORT BUILDER (Task 3 — Prompt-Based Strategic Reports)
 # ════════════════════════════════════════════════════════════
@@ -1203,14 +1247,33 @@ elif view == "📝 Report Builder":
             help="Customize what the report should focus on.",
         )
 
+        # NEW: CONTEXT SELECTOR
+        st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>🧠 INCLUDE VAULTED KNOWLEDGE</div>", unsafe_allow_html=True)
+        vaulted_docs = load_uploaded_docs(ticker)
+        selected_doc_ids = []
+        if vaulted_docs:
+            for doc in vaulted_docs:
+                if st.checkbox(f"📄 {doc['source_url']} ({doc['created_at'][:10]})", key=f"ctx_{doc['id']}"):
+                    selected_doc_ids.append(doc['id'])
+        else:
+            st.info("No vaulted documents available for context selection.")
+
         if st.button("🚀 Generate Standard Report", use_container_width=True, type="primary"):
+            # Combine context from selected documents
+            context_text = ""
+            if selected_doc_ids:
+                sel_docs = [d for d in vaulted_docs if d['id'] in selected_doc_ids]
+                for d in sel_docs:
+                    context_text += f"\n--- Supplemental Source: {d['source_url']} ---\n{d.get('raw_text','')}\n"
+
             with st.spinner("Compiling cross-platform data and generating report… (~60 seconds)"):
                 try:
                     from intelligence import ReportingChain
                     from supabase import create_client as sc
                     sb = sc(SUPABASE_URL, SUPABASE_KEY)
                     chain = ReportingChain(sb)
-                    result = chain.run(selected_company, prompt=user_prompt)
+                    # Note: In a real implementation, context_text would be passed to the chain
+                    result = chain.run(selected_company, prompt=user_prompt + context_text)
                     result["prompt"] = user_prompt
                     st.session_state["built_report"] = result
                     st.session_state["built_report_mode"] = "standard"

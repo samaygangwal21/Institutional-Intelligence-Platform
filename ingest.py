@@ -145,7 +145,8 @@ def ingest_sec_ticker(ticker: str, meta: dict, sb: Client, matcher: SECDataMatch
                     time.sleep(0.15) # respect rate limit
                     doc_resp = requests.get(raw_doc_url, headers=HEADERS, timeout=30)
                     if doc_resp.ok:
-                        upload_to_azure_blob(doc_resp.content, f"sec_filings/{ticker}_{info['form']}_{d}.htm")
+                        azure_url = upload_to_azure_blob(doc_resp.content, f"sec_filings/{ticker}_{info['form']}_{d}.htm")
+                        row["archived_url"] = azure_url
                 except Exception as e:
                     log.warning(f"Could not archive raw SEC filing for {ticker} {d}: {e}")
             
@@ -199,7 +200,11 @@ def ingest_news(ticker: str, sb: Client, days: int = 30):
                     # Sanitize headline for filename
                     safe_headline = re.sub(r'[^\w\s-]', '', row["headline"]).strip().replace(' ', '_')[:60]
                     file_path = f"news/full_articles/{ticker}/{date.today().isoformat()}_{safe_headline}.html"
-                    upload_to_azure_blob(content, file_path)
+                    azure_url = upload_to_azure_blob(content, file_path)
+                    
+                    # Update Supabase with the archived URL
+                    if azure_url:
+                        sb.table("market_intelligence").update({"archived_url": azure_url}).eq("ticker", ticker).eq("headline", row["headline"]).execute()
             
             log.info(f"[{ticker}] Ingested {len(rows)} news articles + archived full content.")
     except Exception as e:
@@ -355,6 +360,13 @@ class ExtractorEngine:
             "sec_filing_url": source_label if isinstance(input_source, str) else None,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+
+        # Vault to Azure
+        from utils import upload_to_azure_blob
+        vault_name = f"manual_uploads/{ticker}/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{source_label}"
+        archived_url = upload_to_azure_blob(raw_text, vault_name)
+        if archived_url:
+            row["archived_url"] = archived_url
         
         if push_to_supabase:
             # Register company
@@ -375,8 +387,11 @@ class ExtractorEngine:
                 "company_name": company, 
                 "source_url": source_label, 
                 "source_type": source_type,
-                "extraction_status": "SUCCESS"
+                "extraction_status": "SUCCESS",
+                "archived_url": archived_url,
+                "raw_text": raw_text # Store text for Report Builder context
             }).execute()
+
         
         return {"status": "SUCCESS", "row": row}
 
@@ -385,6 +400,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="IIP Ingestion Hub")
     parser.add_argument("--ticker", type=str, help="Specific ticker to refresh")
     parser.add_argument("--news-only", action="store_true", help="Only refresh news")
+    parser.add_argument("--sec-only", action="store_true", help="Only refresh SEC financials")
     parser.add_argument("--skip-financials", action="store_true", help="Alias for news-only")
     args = parser.parse_args()
 
@@ -398,6 +414,7 @@ if __name__ == "__main__":
     tickers_to_run = [args.ticker] if args.ticker else CURRENT_COMPANIES.keys()
     
     only_news = args.news_only or args.skip_financials
+    only_sec = args.sec_only
 
     for t in tickers_to_run:
         meta = CURRENT_COMPANIES.get(t)
@@ -408,4 +425,6 @@ if __name__ == "__main__":
         if not only_news and meta.get("cik"):
             ingest_sec_ticker(t, meta, sb, matcher)
         
-        ingest_news(t, sb)
+        if not only_sec:
+            ingest_news(t, sb)
+

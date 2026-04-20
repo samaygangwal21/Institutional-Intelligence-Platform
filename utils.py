@@ -136,10 +136,55 @@ def backfill_sec_urls(supabase: Any, table_name: str):
 
 # ── 3. Azure Blob Storage Utilities ───────────────────────────────────────────
 
+
+
+def generate_signed_blob_url(blob_name: str, expiry_months: int = 3) -> Optional[str]:
+    """
+    Generates a Shared Access Signature (SAS) URL for a private blob.
+    Useful when public access is disabled on the storage account.
+    """
+    from platform_config import AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_CONTAINER_NAME
+    if not AZURE_STORAGE_CONNECTION_STRING:
+        return None
+
+    try:
+        from azure.storage.blob import (
+            BlobServiceClient, generate_blob_sas, BlobSasPermissions
+        )
+        from datetime import datetime, timedelta, timezone
+
+        # Parse connection string for account name and key
+        conn_dict = {kv.split('=', 1)[0]: kv.split('=', 1)[1] for kv in AZURE_STORAGE_CONNECTION_STRING.split(';')}
+        account_name = conn_dict.get('AccountName')
+        account_key = conn_dict.get('AccountKey')
+
+        if not account_name or not account_key:
+            log.error("Could not parse AccountName/Key from connection string.")
+            return None
+
+        # Calculate expiry
+        expiry_time = datetime.now(timezone.utc) + timedelta(days=30 * expiry_months)
+        
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=AZURE_STORAGE_CONTAINER_NAME,
+            blob_name=blob_name,
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=expiry_time
+        )
+
+        sas_url = f"https://{account_name}.blob.core.windows.net/{AZURE_STORAGE_CONTAINER_NAME}/{blob_name}?{sas_token}"
+        return sas_url
+    except Exception as e:
+        log.error(f"Failed to generate SAS URL for {blob_name}: {e}")
+    return None
+
+
 def upload_to_azure_blob(file_bytes_or_str: Any, filename_path: str) -> Optional[str]:
     """
     Uploads file content to Azure Blob Storage using the configured connection string.
-    Returns the public URL of the uploaded blob.
+    Returns the SECURE (SAS-signed) public URL of the uploaded blob.
     """
     from platform_config import AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_CONTAINER_NAME
     
@@ -148,7 +193,7 @@ def upload_to_azure_blob(file_bytes_or_str: Any, filename_path: str) -> Optional
         return None
         
     try:
-        from azure.storage.blob import BlobServiceClient
+        from azure.storage.blob import BlobServiceClient, ContentSettings
         blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
         container_client = blob_service_client.get_container_client(AZURE_STORAGE_CONTAINER_NAME)
         
@@ -161,15 +206,49 @@ def upload_to_azure_blob(file_bytes_or_str: Any, filename_path: str) -> Optional
         
         blob_client = container_client.get_blob_client(safe_filename)
         
+        # Determine Content-Type
+        content_type = "application/octet-stream"
+        if safe_filename.lower().endswith((".html", ".htm")):
+            content_type = "text/html"
+        elif safe_filename.lower().endswith(".json"):
+            content_type = "application/json"
+        elif safe_filename.lower().endswith(".pdf"):
+            content_type = "application/pdf"
+            
+        content_settings = ContentSettings(content_type=content_type)
+        
         # Encode string to bytes if needed
         upload_data = file_bytes_or_str.encode('utf-8') if isinstance(file_bytes_or_str, str) else file_bytes_or_str
             
-        blob_client.upload_blob(upload_data, overwrite=True)
-        log.info(f"Successfully uploaded to Azure Blob: {safe_filename}")
-        return blob_client.url
+        blob_client.upload_blob(upload_data, overwrite=True, content_settings=content_settings)
+        log.info(f"Successfully uploaded to Azure Blob ({content_type}): {safe_filename}")
+        
+        # Return the signed URL instead of the raw one
+        return generate_signed_blob_url(safe_filename)
     except Exception as e:
         log.error(f"Failed to upload to Azure Blob Storage ({filename_path}): {e}")
         return None
+
+
+def delete_from_azure_blob(blob_path: str) -> bool:
+    """
+    Deletes a blob from Azure Storage. Used for pruning stale data.
+    """
+    from platform_config import AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_CONTAINER_NAME
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_NAME:
+        return False
+    try:
+        from azure.storage.blob import BlobServiceClient
+        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        blob_client = blob_service_client.get_blob_client(container=AZURE_STORAGE_CONTAINER_NAME, blob=blob_path)
+        if blob_client.exists():
+            blob_client.delete_blob()
+            log.info(f"Deleted stale blob from Azure: {blob_path}")
+            return True
+    except Exception as e:
+        log.error(f"Error deleting blob {blob_path}: {e}")
+    return False
+
 
 
 def fetch_page_content(url: str) -> Optional[bytes]:

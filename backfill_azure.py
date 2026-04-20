@@ -23,7 +23,9 @@ def run_backfill():
         for doc in (docs or []):
             if doc.get("raw_text") and doc.get("file_name"):
                 log.info(f"Archiving unstructured upload: {doc['file_name']}")
-                upload_to_azure_blob(doc["raw_text"], f"uploads/{doc['file_name']}")
+                azure_url = upload_to_azure_blob(doc["raw_text"], f"uploads/{doc['file_name']}")
+                if azure_url:
+                    sb.table("extracted_documents").update({"archived_url": azure_url}).eq("file_name", doc["file_name"]).execute()
     except Exception as e:
         log.error(f"Error backfilling uploads: {e}")
 
@@ -48,7 +50,9 @@ def run_backfill():
                     doc_resp = requests.get(raw_doc_url, headers=SEC_HEADERS, timeout=30)
                     if doc_resp.ok:
                         fname = f"sec_filings/{row['ticker']}_{row['filing_type']}_{row['fiscal_year']}_{row['fiscal_period']}.htm"
-                        upload_to_azure_blob(doc_resp.content, fname)
+                        azure_url = upload_to_azure_blob(doc_resp.content, fname)
+                        if azure_url:
+                            sb.table("financials").update({"archived_url": azure_url}).eq("ticker", row['ticker']).eq("fiscal_year", row['fiscal_year']).eq("fiscal_period", row['fiscal_period']).execute()
                 except Exception as e:
                     log.error(f"Error archiving {row['ticker']} 10-K/Q: {e}")
     except Exception as e:
@@ -97,7 +101,9 @@ def run_backfill():
                         safe_headline = re.sub(r'[^\w\s-]', '', headline).strip().replace(' ', '_')[:60]
                         file_path = f"news/full_articles/{ticker}/{pub_date}_{safe_headline}.html"
                         log.info(f"Archiving full article: {file_path}")
-                        upload_to_azure_blob(content, file_path)
+                        azure_url = upload_to_azure_blob(content, file_path)
+                        if azure_url:
+                            sb.table("market_intelligence").update({"archived_url": azure_url}).eq("ticker", ticker).eq("headline", headline).execute()
                     
                     # Also archive the JSON snapshot for this specific article if not already done
                     article_json = json.dumps(item)
