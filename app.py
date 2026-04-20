@@ -581,28 +581,27 @@ if view == "📊 Financial Overview":
             <div class='metric-value' style='font-size:20px;'>{fmt_b(val)}</div>
         </div>""", unsafe_allow_html=True)
 
-    # SEC Filing Link
+    # Unified Document Access (Clubbed)
     filing_url = latest_fin.get("sec_filing_url")
-    if filing_url:
-        st.markdown(f"""
-        <div style='margin-top:16px;'>
-            <a href='{filing_url}' target='_blank' style='background:#1f3a5f; border:1px solid #1f6feb;
-               color:#79c0ff; padding:9px 20px; border-radius:8px; text-decoration:none;
-               font-size:13px; font-weight:600;'>
-                📄 OPEN ORIGINAL SEC FILING ↗
-            </a>
-        </div>""", unsafe_allow_html=True)
-    
     archived_url = latest_fin.get("archived_url")
-    if archived_url:
+    
+    if archived_url or filing_url:
+        primary_link = archived_url or filing_url
+        label = "📂 VIEW FULL DOCUMENT (VAULTED)" if archived_url else "📄 VIEW ORIGINAL FILING (SEC)"
+        bg_color = "#1a4731" if archived_url else "#1f3a5f"
+        border_color = "#3fb950" if archived_url else "#1f6feb"
+        text_color = "#aff5b4" if archived_url else "#79c0ff"
+
         st.markdown(f"""
-        <div style='margin-top:8px;'>
-            <a href='{archived_url}' target='_blank' style='background:#1a4731; border:1px solid #3fb950;
-               color:#aff5b4; padding:9px 20px; border-radius:8px; text-decoration:none;
-               font-size:13px; font-weight:600;'>
-                🏦 VIEW IN VAULT (SIGNED) ↗
+        <div style='margin-top:16px; display:flex; align-items:center; gap:12px;'>
+            <a href='{primary_link}' target='_blank' style='background:{bg_color}; border:1px solid {border_color};
+               color:{text_color}; padding:10px 22px; border-radius:8px; text-decoration:none;
+               font-size:14px; font-weight:700;'>
+                {label} ↗
             </a>
+            {f"<a href='{filing_url}' target='_blank' style='color:#8b949e; font-size:12px; text-decoration:none;'>Official Source ↗</a>" if archived_url and filing_url else ""}
         </div>""", unsafe_allow_html=True)
+
 
 
 # ════════════════════════════════════════════════════════════
@@ -917,19 +916,21 @@ elif view == "📰 Intelligence Feed":
             headline = item.get("headline", "")
             archived_url = item.get("archived_url", "")
             
-            vault_link = f' · <a href="{archived_url}" target="_blank" style="color:#3fb950; font-weight:700;">🏦 VAULT ↗</a>' if archived_url else ""
-            source   = item.get("source", "")
-            summary  = item.get("summary", "")[:200]
-
-            link = f'<a href="{url}" target="_blank" style="color:#58a6ff; font-size:12px;">Read ↗</a>' if url else ""
+            # Unified News Link (Clubbed)
+            primary_news_url = archived_url or url
+            news_label = "📖 READ ARTICLE (VAULT)" if archived_url else "🔗 READ ARTICLE"
+            news_color = "#3fb950" if archived_url else "#58a6ff"
+            
             st.markdown(f"""
             <div class='news-item {css_class}'>
                 <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
                     <div style='font-weight:600; color:#f0f6fc; font-size:14px; flex:1;'>{headline}</div>
-                    {link}
+                    <a href='{primary_news_url}' target='_blank' style='color:{news_color}; font-size:12px; font-weight:700; text-decoration:none;'>
+                        {news_label} ↗
+                    </a>
                 </div>
                 <div style='color:#8b949e; font-size:11px; margin-top:4px;'>
-                    {source} · {pub_dt}
+                    {source} · {pub_dt} {f'· <a href="{url}" target="_blank" style="color:#8b949e;">Source ↗</a>' if archived_url and url else ""}
                 </div>
                 {f"<div style='color:#c9d1d9; font-size:12px; margin-top:6px;'>{summary}...</div>" if summary else ""}
             </div>""", unsafe_allow_html=True)
