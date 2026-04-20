@@ -11,6 +11,7 @@ import logging
 import re
 import requests
 from typing import Optional, List, Dict, Any
+from datetime import datetime
 from platform_config import TARGET_COMPANIES
 
 log = logging.getLogger("utils")
@@ -261,12 +262,112 @@ def fetch_page_content(url: str) -> Optional[bytes]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     }
     try:
-        # Finnhub links redirect to news sources. We follow them.
         resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
         if resp.ok:
+            # If we got a basic HTML response, try to clean it into 'Reader Mode'
+            if "text/html" in resp.headers.get("Content-Type", "").lower():
+                return create_reader_mode_html(resp.text, url)
             return resp.content
-        log.warning(f"Failed to fetch content from {url}: {resp.status_code}")
     except Exception as e:
         log.error(f"Error fetching page content from {url}: {e}")
     return None
+
+def create_reader_mode_html(raw_html: str, url: str) -> bytes:
+    """
+    Transforms messy website HTML into a clean, professional 'Reader Mode' document.
+    """
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(raw_html, 'html.parser')
+    
+    # 1. Extract Headline
+    title = soup.title.string if soup.title else "News Article"
+    h1 = soup.find('h1')
+    if h1: title = h1.get_text().strip()
+
+    # 2. Extract Body (Focus on <p> tags in main-like containers)
+    # Strip out scripts, styles, navs, and ads
+    for tag in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe', 'ad']):
+        tag.decompose()
+
+    paragraphs = soup.find_all('p')
+    body_content = ""
+    for p in paragraphs:
+        text = p.get_text().strip()
+        if len(text) > 40: # Ignore short fragments/tiny lines
+            body_content += f"<p>{text}</p>\n"
+
+    if not body_content:
+        body_content = "<p><i>(Content could not be extracted automatically. Please visit the original source link below.)</i></p>"
+
+    # 3. Wrap in a High-End Template
+    template = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                background-color: #0d1117;
+                color: #c9d1d9;
+                line-height: 1.6;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }}
+            .container {{
+                background: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 12px;
+                padding: 40px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            }}
+            h1 {{
+                color: #f0f6fc;
+                border-bottom: 2px solid #30363d;
+                padding-bottom: 20px;
+                margin-bottom: 30px;
+                font-size: 2.2em;
+            }}
+            p {{ margin-bottom: 1.5em; font-size: 1.1em; color: #8b949e; }}
+            .metadata {{
+                color: #58a6ff;
+                font-size: 0.9em;
+                margin-bottom: 40px;
+                display: flex;
+                justify-content: space-between;
+            }}
+            .footer {{
+                margin-top: 60px;
+                border-top: 1px solid #30363d;
+                padding-top: 20px;
+                text-align: center;
+                font-size: 0.8em;
+                color: #484f58;
+            }}
+            a {{ color: #58a6ff; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="metadata">
+                <span>INTELLECTUAL PROPERTY VAULT</span>
+                <span>SECURED ARCHIVE</span>
+            </div>
+            <h1>{title}</h1>
+            <div class="content">
+                {body_content}
+            </div>
+            <div class="footer">
+                Archived from: <a href="{url}" target="_blank">{url}</a><br>
+                Institutional Intelligence Platform &copy; {datetime.now().year}
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return template.encode('utf-8')
 
