@@ -834,7 +834,7 @@ elif view == "🌐 Corporate Ecosystem":
             color = TYPE_COLORS.get(rtype, "#30363d")
             st.markdown(f"<div style='color:{color}; font-size:12px; font-weight:700; margin:12px 0 6px;'>▶ {rtype}</div>", unsafe_allow_html=True)
             for c in group:
-                target = c.get("target_company", "Unknown")
+                target = c.get("target_company", "Unnamed Entity")
                 detail = c.get("relationship_detail", "")
                 val    = c.get("deal_value_usd")
                 status = c.get("status", "ACTIVE")

@@ -333,8 +333,8 @@ class ExtractorEngine:
         
         log.info(f"Extracted {len(raw_text)} chars from {source_label}")
         analysis = analyze_with_gemini(raw_text)
-        ticker = (ticker_override or analysis.get("ticker", "UNKNOWN")).upper()
-        company = company_override or analysis.get("company_name", "Unknown")
+        ticker = (ticker_override or analysis.get("ticker", "TBD")).upper()
+        company = company_override or analysis.get("company_name", "Unnamed Company")
         
         year = int(re.search(r"(\d{4})", analysis.get("period", "")).group(1)) if re.search(r"(\d{4})", analysis.get("period", "")) else datetime.now().year
         end_date = analysis.get("end_date") or f"{year}-12-31"
