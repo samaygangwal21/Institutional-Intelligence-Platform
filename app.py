@@ -915,6 +915,8 @@ elif view == "📰 Intelligence Feed":
             url = item.get("url", "")
             headline = item.get("headline", "")
             archived_url = item.get("archived_url", "")
+            source = item.get("source", "")
+            summary = item.get("summary", "")[:200]
             
             # Unified News Link (Clubbed)
             primary_news_url = archived_url or url
