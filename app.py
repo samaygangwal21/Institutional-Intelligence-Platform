@@ -27,12 +27,13 @@ import hashlib
 import json
 from typing import List, Dict, Optional, Any, cast
 
+# Consolidated Modules
 import platform_config
 from platform_config import ( # type: ignore
     SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY, GEMINI_ENDPOINT,
-    TARGET_COMPANIES, COMPANY_ICONS, SECTOR_ICONS, load_target_companies
+    TARGET_COMPANIES, COMPANY_ICONS, SECTOR_ICONS, load_target_companies,
+    get_supabase
 )
-# Consolidated Modules
 from ingest import ExtractorEngine
 from intelligence import render_ecosystem_graph
 from utils import build_sec_ix_url, backfill_sec_urls
@@ -232,13 +233,87 @@ st.markdown("""
     }
     #MainMenu {visibility:hidden;} footer {visibility:hidden;}
     [data-testid="stToolbar"] {visibility:hidden;}
+    .auth-card {
+        background: linear-gradient(135deg, rgba(30, 35, 45, 0.4) 0%, rgba(15, 20, 25, 0.7) 100%);
+        backdrop-filter: blur(40px);
+        border: 1px solid rgba(88, 166, 255, 0.2);
+        padding: 50px;
+        border-radius: 24px;
+        max-width: 450px;
+        margin: 100px auto;
+        text-align: center;
+        box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Auth Logic ──────────────────────────────────────────────────────────────
+def render_auth():
+    st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
+    st.title("🗄️ Institutional Intelligence")
+    st.markdown("<p style='color:#8b949e; margin-bottom:30px;'>Secure Financial Research & Data Vault</p>", unsafe_allow_html=True)
+    
+    auth_tab = st.tabs(["Login", "Sign Up"])
+    
+    with auth_tab[0]:
+        with st.form("login_form"):
+            email = st.text_input("Corporate Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Access Platform", use_container_width=True)
+            if submitted:
+                handle_login(email, password)
+                
+    with auth_tab[1]:
+        with st.form("signup_form"):
+            email = st.text_input("Corporate Email")
+            pwd = st.text_input("Password", type="password")
+            confirm = st.text_input("Confirm Password", type="password")
+            submitted = st.form_submit_button("Create Account", use_container_width=True)
+            if submitted:
+                if pwd != confirm:
+                    st.error("Passwords do not match.")
+                else:
+                    handle_signup(email, pwd)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def handle_login(email, password):
+    sb = get_supabase()
+    try:
+        res = sb.auth.sign_in_with_password({"email": email, "password": password})
+        if res.user:
+            st.session_state.user = res.user
+            st.success("Access Granted.")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Login Failed: {str(e)}")
+
+def handle_signup(email, password):
+    sb = get_supabase()
+    try:
+        res = sb.auth.sign_up({"email": email, "password": password})
+        if res.user:
+            st.info("Account created. Please check your email for verification before logging in.")
+    except Exception as e:
+        st.error(f"Signup Failed: {str(e)}")
+
+def handle_logout():
+    sb = get_supabase()
+    sb.auth.sign_out()
+    if "user" in st.session_state:
+        del st.session_state.user
+    st.rerun()
+
+# ── Main Entry Point ───────────────────────────────────────────────────────
+if "user" not in st.session_state:
+    render_auth()
+    st.stop()
+
+# Logout button in sidebar
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    handle_logout()
+
 # ── Supabase ──────────────────────────────────────────────────────────────────
-@st.cache_resource
-def get_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+# Using get_supabase() imported from platform_config
 
 supabase = get_supabase()
 
