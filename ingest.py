@@ -206,6 +206,10 @@ def ingest_news(ticker: str, sb: Client, days: int = 30):
                     if azure_url:
                         sb.table("market_intelligence").update({"archived_url": azure_url}).eq("ticker", ticker).eq("headline", row["headline"]).execute()
             
+            # Maintain 50-article limit in Azure vault
+            from utils import prune_azure_news_blobs
+            prune_azure_news_blobs(ticker, max_count=50)
+            
             log.info(f"[{ticker}] Ingested {len(rows)} news articles + archived full content.")
     except Exception as e:
         log.error(f"[{ticker}] News Failed: {e}")

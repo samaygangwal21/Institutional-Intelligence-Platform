@@ -250,6 +250,44 @@ def delete_from_azure_blob(blob_path: str) -> bool:
         log.error(f"Error deleting blob {blob_path}: {e}")
     return False
 
+def prune_azure_news_blobs(ticker: str, max_count: int = 50):
+    """
+    Lists all news articles for a ticker in Azure and deletes the oldest ones
+    to maintain the most recent 'max_count' articles.
+    """
+    from platform_config import AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_CONTAINER_NAME
+    if not AZURE_STORAGE_CONNECTION_STRING or not AZURE_STORAGE_CONTAINER_NAME:
+        return
+
+    try:
+        from azure.storage.blob import BlobServiceClient
+        prefix = f"news/full_articles/{ticker}/"
+        service = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        container = service.get_container_client(AZURE_STORAGE_CONTAINER_NAME)
+        
+        # 1. List all blobs in the company news directory
+        blobs = []
+        for blob in container.list_blobs(name_starts_with=prefix):
+            blobs.append({
+                "name": blob.name,
+                "modified": blob.last_modified
+            })
+        
+        # 2. Sort by last_modified (oldest first)
+        blobs.sort(key=lambda x: x["modified"])
+        
+        # 3. If count exceeds max, prune the oldest
+        if len(blobs) > max_count:
+            to_delete = len(blobs) - max_count
+            log.info(f"[{ticker}] Pruning {to_delete} old news articles from Azure vault.")
+            for i in range(to_delete):
+                blob_name = blobs[i]["name"]
+                container.delete_blob(blob_name)
+                log.debug(f"Deleted old news blob: {blob_name}")
+                
+    except Exception as e:
+        log.error(f"Failed to prune news blobs for {ticker}: {e}")
+
 
 
 def fetch_page_content(url: str) -> Optional[bytes]:

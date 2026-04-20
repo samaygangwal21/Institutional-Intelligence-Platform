@@ -46,6 +46,16 @@ def run_automated_maintenance():
     except Exception as e:
         log.error(f"Error during pruning: {e}")
 
+    # --- 1b. VAULT CONSOLIDATION (50-Article limit per Ticker) ---
+    log.info("Starting vault consolidation (Max 50 articles per company)...")
+    from utils import prune_azure_news_blobs
+    for ticker in TARGET_COMPANIES:
+        try:
+            prune_azure_news_blobs(ticker, max_count=50)
+        except Exception as e:
+            log.error(f"[{ticker}] Failed to prune vault: {e}")
+    log.info("Vault consolidation complete.")
+
     # --- 2. QUARTERLY INGESTION CHECK ---
     log.info("Checking for overdue quarterly ingestion...")
     matcher = SECDataMatcher(cutoff_years=1)
