@@ -202,9 +202,9 @@ def ingest_news(ticker: str, sb: Client, days: int = 30):
                     file_path = f"news/full_articles/{ticker}/{date.today().isoformat()}_{safe_headline}.html"
                     azure_url = upload_to_azure_blob(content, file_path)
                     
-                    # Update Supabase with the archived URL
+                    # Update Supabase with the archived URL (Using URL for matching to avoid encoding issues)
                     if azure_url:
-                        sb.table("market_intelligence").update({"archived_url": azure_url}).eq("ticker", ticker).eq("headline", row["headline"]).execute()
+                        sb.table("market_intelligence").update({"archived_url": azure_url}).eq("ticker", ticker).eq("url", row["url"]).execute()
             
             # Maintain 50-article limit in Azure vault
             from utils import prune_azure_news_blobs

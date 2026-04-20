@@ -14,26 +14,25 @@ New in v2:
 ============================================================
 """
 
-from typing import List, Dict, Optional, Any, cast
+import os
+import subprocess
+import streamlit as st # type: ignore
+import pandas as pd # type: ignore
+import plotly.graph_objects as go # type: ignore
+import plotly.express as px # type: ignore
+from supabase import create_client, Client # type: ignore
+from datetime import datetime, date
+import requests # type: ignore
 import hashlib
 import json
-import os
-from pathlib import Path
-from datetime import datetime, date
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-import requests
-from supabase import Client
+from typing import List, Dict, Optional, Any, cast
 
-# Consolidated Modules
 import platform_config
 from platform_config import ( # type: ignore
     SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY, GEMINI_ENDPOINT,
-    TARGET_COMPANIES, COMPANY_ICONS, SECTOR_ICONS, load_target_companies,
-    get_supabase
+    TARGET_COMPANIES, COMPANY_ICONS, SECTOR_ICONS, load_target_companies
 )
+# Consolidated Modules
 from ingest import ExtractorEngine
 from intelligence import render_ecosystem_graph
 from utils import build_sec_ix_url, backfill_sec_urls
@@ -224,206 +223,22 @@ st.markdown("""
     .badge-rejected {
         background: rgba(248, 81, 73, 0.15); color: #f85149;
         border: 1px solid rgba(248, 81, 73, 0.3);
-        .stTabs [aria-selected="true"] {
-        color: #58a6ff !important;
-        border-bottom: 2px solid #58a6ff !important;
+        padding: 4px 14px; border-radius: 100px; font-size: 10px; font-weight: 800;
+    }
+    .badge-pending {
+        background: rgba(139, 148, 158, 0.15); color: #8b949e;
+        border: 1px solid rgba(139, 148, 158, 0.3);
+        padding: 4px 14px; border-radius: 100px; font-size: 10px; font-weight: 800;
     }
     #MainMenu {visibility:hidden;} footer {visibility:hidden;}
     [data-testid="stToolbar"] {visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Auth Helpers (Local File-based) ───────────────────────────────────────────
-USERS_FILE = Path("users.txt")
-
-def _hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
-
-def load_users() -> list[dict]:
-    users: list[dict] = []
-    if USERS_FILE.exists():
-        try:
-            for line in USERS_FILE.read_text(encoding="utf-8").splitlines():
-                parts = line.split("\t")
-                if len(parts) >= 3:
-                    users.append({
-                        "name": parts[0].strip(),
-                        "email": parts[1].strip().lower(),
-                        "password_hash": parts[2].strip()
-                    })
-        except: pass
-    return users
-
-def register_user(name: str, email: str, password: str):
-    email_l = email.strip().lower()
-    for u in load_users():
-        if u["email"] == email_l:
-            raise ValueError("Email already registered.")
-    
-    pw_hash = _hash_pw(password)
-    # Format: name \t email \t hash
-    line = f"{name}\t{email_l}\t{pw_hash}\n"
-    with USERS_FILE.open("a", encoding="utf-8") as f:
-        f.write(line)
-    return {"name": name, "email": email_l}
-
-def login_user(email: str, password: str):
-    email_l = email.strip().lower()
-    hashed = _hash_pw(password)
-    for u in load_users():
-        if u["email"] == email_l and u["password_hash"] == hashed:
-            return u
-    raise ValueError("Invalid email or password.")
-
-# ── Auth UI Implementation ───────────────────────────────────────────────────
-# ── Auth UI Implementation ───────────────────────────────────────────────────
-def render_auth():
-    # Insert custom CSS directly for the Auth screen to make it pop and feel premium.
-    st.markdown("""
-    <style>
-        /* Modern Premium Auth UI */
-        [data-testid="stAppViewContainer"] {
-            background: radial-gradient(circle at top right, rgba(36, 41, 56, 0.9) 0%, rgba(13, 17, 23, 1) 70%), url('https://grainy-gradients.vercel.app/noise.svg');
-        }
-        [data-testid="stSidebar"] { display: none; }
-        
-        .auth-container {
-            max-width: 420px;
-            margin: 80px auto;
-            position: relative;
-        }
-
-        .auth-card {
-            background: linear-gradient(145deg, rgba(22, 27, 34, 0.4), rgba(13, 17, 23, 0.8));
-            backdrop-filter: blur(28px);
-            -webkit-backdrop-filter: blur(28px);
-            border: 1px solid rgba(88, 166, 255, 0.15);
-            border-radius: 20px;
-            padding: 40px;
-            box-shadow: 0 30px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
-            text-align: center;
-            overflow: hidden;
-        }
-        
-        /* Subtle glowing top border line */
-        .auth-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(88, 166, 255, 0.6), transparent);
-        }
-
-        .auth-title {
-            font-size: 24px;
-            font-weight: 800;
-            color: #ffffff;
-            margin-bottom: 8px;
-            font-family: 'Outfit', sans-serif;
-            letter-spacing: -0.01em;
-        }
-
-        .auth-subtitle {
-            color: #8b949e;
-            font-size: 13px;
-            margin-bottom: 32px;
-            font-family: 'Inter', sans-serif;
-        }
-        
-        /* Premium Input Fields */
-        .stTextInput input {
-            background-color: rgba(13, 17, 23, 0.6) !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 10px !important;
-            padding: 0.8rem 1rem !important;
-            color: #e6edf3 !important;
-            font-size: 14px !important;
-            transition: all 0.2s ease !important;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2) !important;
-        }
-        .stTextInput input:focus {
-            border-color: #58a6ff !important;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2), 0 0 0 3px rgba(88, 166, 255, 0.2) !important;
-        }
-
-        /* Enhanced Primary Button */
-        [data-testid="baseButton-secondary"] {
-            background: linear-gradient(180deg, #2ea043 0%, #238636 100%) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
-            color: white !important;
-            border-radius: 10px !important;
-            font-weight: 600 !important;
-            font-size: 14px !important;
-            height: auto !important;
-            padding: 0.6rem 1.2rem !important;
-            margin-top: 10px !important;
-            box-shadow: 0 4px 12px rgba(46, 160, 67, 0.2) !important;
-            transition: all 0.3s ease !important;
-        }
-        [data-testid="baseButton-secondary"]:hover {
-            transform: translateY(-2px) !important;
-            box-shadow: 0 6px 16px rgba(46, 160, 67, 0.4) !important;
-            border-color: rgba(255,255,255,0.2) !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='auth-container'><div class='auth-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='auth-title'>🏛️ Institutional Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='auth-subtitle'>Secure Financial Research & Data Vault</div>", unsafe_allow_html=True)
-    
-    auth_mode = st.radio("Access Mode", ["Login", "Register"], horizontal=True, label_visibility="collapsed")
-    
-    st.write("") # spacing
-
-    if auth_mode == "Login":
-        email = st.text_input("Email", placeholder="name@company.com")
-        password = st.text_input("Password", type="password", placeholder="••••••••")
-        if st.button("Enter Platform", use_container_width=True):
-            try:
-                user = login_user(email, password)
-                st.session_state.user = user
-                st.success(f"Welcome back, {user['name']}!")
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-                
-    else:
-        name = st.text_input("Full Name", placeholder="Jane Doe")
-        email = st.text_input("Email", placeholder="name@company.com")
-        pwd = st.text_input("Password", type="password", placeholder="••••••••")
-        confirm = st.text_input("Confirm Password", type="password", placeholder="••••••••")
-        if st.button("Create Account", use_container_width=True):
-            if not name or not email or not pwd:
-                st.error("All fields are required.")
-            elif pwd != confirm:
-                st.error("Passwords do not match.")
-            else:
-                try:
-                    register_user(name, email, pwd)
-                    st.success("Registration successful! You can now switch to Login.")
-                except Exception as e:
-                    st.error(str(e))
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-def handle_logout():
-    if "user" in st.session_state:
-        del st.session_state.user
-    st.rerun()
-
-# ── Main Entry Point ───────────────────────────────────────────────────────
-if "user" not in st.session_state:
-    render_auth()
-    st.stop()
-
-# Logout button in sidebar
-with st.sidebar:
-    st.markdown(f"<div style='color:#8b949e; font-size:11px; margin-bottom:10px;'>USER: {st.session_state.user['name']}</div>", unsafe_allow_html=True)
-    if st.button("🚪 Logout", use_container_width=True):
-        handle_logout()
-
 # ── Supabase ──────────────────────────────────────────────────────────────────
-# Using get_supabase() imported from platform_config
+@st.cache_resource
+def get_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = get_supabase()
 
