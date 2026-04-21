@@ -397,7 +397,7 @@ with st.sidebar:
     # Watchlist toggle
     in_watchlist = ticker in st.session_state.watchlist
     wl_label = "⭐ Remove from Watchlist" if in_watchlist else "☆ Add to Watchlist"
-    if st.button(wl_label, use_container_width=True):
+    if st.button(wl_label, width='stretch'):
         if in_watchlist: st.session_state.watchlist.discard(ticker)
         else: st.session_state.watchlist.add(ticker)
         st.rerun()
@@ -418,7 +418,7 @@ with st.sidebar:
     if view == "📥 Document Extractor":
         st.info("💡 Running in **Vault Mode**. Extracted data will be automatically cataloged.")
 
-    if st.button("🔄 Refresh Data", use_container_width=True):
+    if st.button("🔄 Refresh Data", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
@@ -483,7 +483,7 @@ if view == "📊 Financial Overview":
     # Task 2-A: UI-triggered pipeline button
     col_hdr, col_btn = st.columns([3, 1])
     with col_btn:
-        if st.button("🔄 Fetch Latest Financials", use_container_width=True, key="fetch_financials_btn"):
+        if st.button("🔄 Fetch Latest Financials", width='stretch', key="fetch_financials_btn"):
             try:
                 # Updated to point to the consolidated ingest.py
                 subprocess.run(
@@ -565,7 +565,7 @@ if view == "📊 Financial Overview":
                           xaxis={"gridcolor": "#21262d"},
                           yaxis={"gridcolor": "#21262d", "title": "USD Billions"},
                           margin={"l": 0, "r": 0, "t": 10, "b": 0}, hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Balance sheet
     st.markdown("<div class='section-header'>BALANCE SHEET COMPOSITION</div>", unsafe_allow_html=True)
@@ -634,7 +634,7 @@ elif view == "📈 Quarterly Drill-Down":
                             xaxis={"gridcolor": "#21262d"},
                             yaxis={"gridcolor": "#21262d", "title": "Revenue (USD Billions)"},
                             margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_q, use_container_width=True)
+        st.plotly_chart(fig_q, width='stretch')
 
         # Net Income by quarter
         st.markdown("<div class='section-header'>QUARTERLY NET INCOME</div>", unsafe_allow_html=True)
@@ -651,7 +651,7 @@ elif view == "📈 Quarterly Drill-Down":
                               xaxis={"gridcolor": "#21262d"},
                               yaxis={"gridcolor": "#21262d", "title": "Net Income (Billions)"},
                               margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_ni, use_container_width=True)
+        st.plotly_chart(fig_ni, width='stretch')
 
         # Quarterly data table
         st.markdown("<div class='section-header'>QUARTERLY RAW DATA</div>", unsafe_allow_html=True)
@@ -669,7 +669,7 @@ elif view == "📈 Quarterly Drill-Down":
         
         st.dataframe(
             df_show.set_index("Label"),
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "Sec Filing Url": st.column_config.LinkColumn(
                     "SEC Filing",
@@ -737,7 +737,7 @@ elif view == "🌍 Sector Heatmap":
             margin={"l": 0, "r": 0, "t": 40, "b": 0}, height=420,
             coloraxis_showscale=False,
         )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat, width='stretch')
 
         # Metrics comparison table
         st.markdown("<div class='section-header'>COMPARISON TABLE (LATEST FY)</div>", unsafe_allow_html=True)
@@ -757,7 +757,7 @@ elif view == "🌍 Sector Heatmap":
                 "Cash":       fmt_b(row["cash"]),
                 "EPS":        f"${row['eps']:.2f}" if row["eps"] else "–",
             })
-        st.dataframe(pd.DataFrame(table_data).set_index("Ticker"), use_container_width=True)
+        st.dataframe(pd.DataFrame(table_data).set_index("Ticker"), width='stretch')
 
         # Grouped bar — Revenue vs Net Income
         sector_label = selected_sector if selected_sector != "All" else "ALL SECTORS"
@@ -773,7 +773,7 @@ elif view == "🌍 Sector Heatmap":
                                xaxis={"gridcolor": "#21262d"},
                                yaxis={"gridcolor": "#21262d", "title": "USD Billions"},
                                margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
 
 
 # ════════════════════════════════════════════════════════════
@@ -785,7 +785,7 @@ elif view == "🌐 Corporate Ecosystem":
     # Task 2-C: UI-triggered ecosystem pipeline
     eco_hdr, eco_btn_col = st.columns([3, 1])
     with eco_btn_col:
-        if st.button("🌐 Update Ecosystem", use_container_width=True, key="update_ecosystem_btn"):
+        if st.button("🌐 Update Ecosystem", width='stretch', key="update_ecosystem_btn"):
             with st.spinner("⏳ Scanning SEC 8-K filings for new relationships…"):
                 try:
                     subprocess.run(
@@ -859,7 +859,7 @@ elif view == "📰 Intelligence Feed":
     # Task 2-B: Refresh News pipeline button
     feed_col, btn_col = st.columns([3, 1])
     with btn_col:
-        if st.button("📰 Refresh News", use_container_width=True, key="refresh_news_btn"):
+        if st.button("📰 Refresh News", width='stretch', key="refresh_news_btn"):
             try:
                 subprocess.run(
                     ["python", "ingest.py", "--ticker", ticker, "--news-only"],
@@ -947,7 +947,7 @@ elif view == "📋 Report Archive":
     # Task 2-D: UI-triggered report generation pipeline
     arc_hdr, arc_btn_col = st.columns([3, 1])
     with arc_btn_col:
-        if st.button("📊 Generate Reports", use_container_width=True, key="gen_reports_btn"):
+        if st.button("📊 Generate Reports", width='stretch', key="gen_reports_btn"):
             with st.spinner("⏳ Running 5-agent reporting pipeline… (this may take ~2 minutes)"):
                 try:
                     subprocess.run(
@@ -1029,7 +1029,7 @@ elif view == "📋 Report Archive":
             if snap:
                 with st.expander("📊 Data Snapshot used for verification"):
                     snap_df = pd.DataFrame([{"Metric": k, "Value": v} for k, v in snap.items()])
-                    st.dataframe(snap_df.set_index("Metric"), use_container_width=True)
+                    st.dataframe(snap_df.set_index("Metric"), width='stretch')
 
             # SEC link
             sec_url = r.get("sec_filing_url")
@@ -1070,7 +1070,7 @@ elif view == "📋 Report Archive":
                                    xaxis={"gridcolor": "#21262d"},
                                    yaxis={"gridcolor": "#21262d", "title": "Compliance Score", "range": [0, 105]},
                                    margin={"l": 0, "r": 0, "t": 10, "b": 0})
-            st.plotly_chart(fig_comp, use_container_width=True)
+            st.plotly_chart(fig_comp, width='stretch')
 
 
 # ════════════════════════════════════════════════════════════
@@ -1094,14 +1094,14 @@ elif view == "📥 Document Extractor":
             extract_url = st.text_input("URL", placeholder="https://company.com/investor-relations or YouTube URL", label_visibility="collapsed", key="extract_url")
             url_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="url_company")
             url_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="url_ticker")
-            extract_url_btn = st.button("🔍 Extract from URL", use_container_width=True, key="extract_url_btn")
+            extract_url_btn = st.button("🔍 Extract from URL", width='stretch', key="extract_url_btn")
 
         with ext_col2:
             st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>📎 Upload File</div>", unsafe_allow_html=True)
             uploaded_file = st.file_uploader("Upload", type=["pdf", "docx", "txt", "md"], label_visibility="collapsed", key="file_upload")
             file_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="file_company")
             file_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="file_ticker")
-            extract_file_btn = st.button("📄 Extract from File", use_container_width=True, key="extract_file_btn")
+            extract_file_btn = st.button("📄 Extract from File", width='stretch', key="extract_file_btn")
     else:
         st.markdown("""
         <div style='background:rgba(63,185,80,0.1); border:1px solid #3fb950; border-radius:8px; padding:16px; margin-bottom:24px; text-align:center;'>
@@ -1109,7 +1109,7 @@ elif view == "📥 Document Extractor":
             <div style='color:#8b949e; font-size:14px;'>The data has been extracted, normalized to USD, and synchronized to the institutional vault.</div>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("🔄 New Extraction", use_container_width=True):
+        if st.button("🔄 New Extraction", width='stretch'):
             del st.session_state["last_extraction"]
             st.rerun()
 
@@ -1202,7 +1202,7 @@ elif view == "📥 Document Extractor":
         
         st.dataframe(
             doc_df,
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "Vault Link": st.column_config.LinkColumn(
                     "🏦 Vault Link",
@@ -1261,7 +1261,7 @@ elif view == "📝 Report Builder":
         else:
             st.info("No vaulted documents available for context selection.")
 
-        if st.button("🚀 Generate Standard Report", use_container_width=True, type="primary"):
+        if st.button("🚀 Generate Standard Report", width='stretch', type="primary"):
             # Combine context from selected documents
             context_text = ""
             if selected_doc_ids:
@@ -1310,7 +1310,7 @@ elif view == "📝 Report Builder":
             help="Mention specific companies, deals, or scenarios. Gemini will detect and analyze secondary companies automatically.",
         )
 
-        if st.button("🎯 Generate Strategic Report", use_container_width=True, type="primary"):
+        if st.button("🎯 Generate Strategic Report", width='stretch', type="primary"):
             if not user_prompt.strip():
                 st.warning("⚠️ Please enter a strategic query.")
             else:
@@ -1472,7 +1472,7 @@ Format your response in markdown. Do not speculate beyond the data provided.
         ]
         cols = st.columns(2)
         for i, q in enumerate(suggestions):
-            if cols[i % 2].button(q, key=f"sugg_{i}", use_container_width=True):
+            if cols[i % 2].button(q, key=f"sugg_{i}", width='stretch'):
                 st.session_state.chat_history.append({"role": "user", "content": q})
                 with st.spinner("Thinking..."):
                     messages = [{"role": "user", "content": system_context + "\n\nUser question: " + q}]
@@ -1486,7 +1486,7 @@ Format your response in markdown. Do not speculate beyond the data provided.
         with col_inp:
             user_input = st.text_input("", placeholder=f"Ask about {ticker}...", label_visibility="collapsed")
         with col_btn:
-            submitted = st.form_submit_button("Send →", use_container_width=True)
+            submitted = st.form_submit_button("Send →", width='stretch')
 
     if submitted and user_input.strip():
         st.session_state.chat_history.append({"role": "user", "content": user_input})
@@ -1499,6 +1499,6 @@ Format your response in markdown. Do not speculate beyond the data provided.
         st.rerun()
 
     if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat", use_container_width=False):
+        if st.button("🗑️ Clear Chat", width='content'):
             st.session_state.chat_history = []
             st.rerun()
