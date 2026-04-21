@@ -1,6 +1,6 @@
 """
 ============================================================
-PART E: STREAMLIT DASHBOARD v2 — INSTITUTIONAL INTELLIGENCE
+PART E: STREAMLIT DASHBOARD v2 — COMPANY INSIGHTS
 Doc-extract-and-report | samaygangwal21@gmail.com
 
 New in v2:
@@ -52,7 +52,7 @@ def load_uploaded_docs(ticker: str) -> List[Dict]:
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Institutional Intelligence",
+    page_title="Company Insights | Flairminds",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -372,9 +372,9 @@ if "chat_history" not in st.session_state:
 with st.sidebar:
     st.markdown("""
     <div class='sidebar-brand'>
-        <div class='sidebar-logo'>🏛️</div>
-        <div style='font-size:15px; font-weight:800; color:#f0f6fc; letter-spacing:0.05em;'>INSTITUTIONAL</div>
-        <div style='font-size:9px; color:#8b949e; letter-spacing:0.3em; margin-top:2px;'>INTELLIGENCE PLATFORM</div>
+        <div class='sidebar-logo'>📊</div>
+        <div style='font-size:15px; font-weight:800; color:#f0f6fc; letter-spacing:0.05em;'>COMPANY INSIGHTS</div>
+        <div style='font-size:9px; color:#8b949e; letter-spacing:0.3em; margin-top:2px;'>FLAIRMINDS PLATFORM</div>
     </div>
     """, unsafe_allow_html=True)
 

@@ -1,5 +1,5 @@
 """
-ingest.py — Central Data Inflow Hub for Institutional Intelligence Platform
+ingest.py — Central Data Inflow Hub for Company Insights (Flairminds)
 ========================================================================
 Consolidated from extractor.py and financial_ingestor.py.
 Handles both SEC EDGAR REST API ingestion and unstructured Document/URL extraction.

@@ -1,5 +1,5 @@
 """
-Central Configuration for Institutional Intelligence Platform
+Central Configuration for Company Insights (Flairminds)
 """
 
 import os

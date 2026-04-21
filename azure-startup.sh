@@ -1,5 +1,5 @@
 #!/bin/bash
-# Azure App Service Startup Script for Streamlit
+# Azure App Service Startup Script for Company Insights (Flairminds)
 
 # 1. Ensure the internal port 8000 is used (Azure default)
 # 2. Use 0.0.0.0 to allow the Azure load balancer to reach the container

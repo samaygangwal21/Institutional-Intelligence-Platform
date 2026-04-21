@@ -1,4 +1,4 @@
-# 🏛️ Institutional Intelligence Platform (Initial Version)
+# 🏛️ Company Insights (Flairminds Platform)
 
 **AI-powered fund manager intelligence system for financial analysis, ecosystem mapping, and strategic research.**
 
@@ -145,4 +145,4 @@ This is the initial working version of the platform. Several enhancements are ac
 
 ---
 
-*Institutional Intelligence Platform (Initial Version) | Prototype*
+*Company Insights | Global Intelligence Hub*

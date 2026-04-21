@@ -1,5 +1,5 @@
 """
-utils.py — Shared Utilities for Institutional Intelligence Platform
+utils.py — Shared Utilities for Company Insights (Flairminds)
 ============================================================
 Consolidated from schema_map.py and sec_url_utils.py.
 Provides financial column mapping, fuzzy matching, and SEC EDGAR URL resolution.
@@ -401,7 +401,7 @@ def create_reader_mode_html(raw_html: str, url: str) -> bytes:
             </div>
             <div class="footer">
                 Archived from: <a href="{url}" target="_blank">{url}</a><br>
-                Institutional Intelligence Platform &copy; {datetime.now().year}
+                Company Insights &copy; {datetime.now().year}
             </div>
         </div>
     </body>
