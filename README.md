@@ -2,8 +2,6 @@
 
 **AI-powered fund manager intelligence system for financial analysis, ecosystem mapping, and strategic research.**
 
-Identity: Doc-extract-and-report | samaygangwal21@gmail.com
-
 ---
 
 ## 🚀 Core Capabilities
