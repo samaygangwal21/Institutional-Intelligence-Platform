@@ -24,7 +24,7 @@ from supabase import create_client, Client
 
 from platform_config import (
     SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY, GEMINI_ENDPOINT,
-    TARGET_TICKERS, TARGET_COMPANIES, SEC_HEADERS
+    SEC_HEADERS, get_company_meta
 )
 
 log = logging.getLogger("Intelligence")
@@ -127,7 +127,7 @@ Respond with a brief audit summary."""
         # 5. Store (upsert to prevent duplicates per fiscal period)
         report_row = {
             "ticker": ticker,
-            "company_name": TARGET_COMPANIES.get(ticker, {}).get("name", ticker),
+            "company_name": get_company_meta(ticker).get("name", ticker),
             "report_title": f"Institutional Equity Report: {ticker} — {fp} {fy}",
             "fiscal_year": fy or datetime.now().year,
             "fiscal_period": fp or "FY",
@@ -183,7 +183,7 @@ def generate_custom_report(ticker: str, prompt: str = "", sb: Optional[Client] =
     # Generate strategic report
     full_prompt = f"""You are an expert institutional strategic advisor and equity analyst.
 
-COMPANY: {ticker} — {TARGET_COMPANIES.get(ticker, {}).get('name', ticker)}
+COMPANY: {ticker} — {get_company_meta(ticker).get('name', ticker)}
 
 VAULT CONTEXT:
 {context}
@@ -201,7 +201,7 @@ Format your response in professional Markdown with clear sections."""
         try:
             sb.table("reports").insert({
                 "ticker": ticker,
-                "company_name": TARGET_COMPANIES.get(ticker, {}).get("name", ticker),
+                "company_name": get_company_meta(ticker).get("name", ticker),
                 "report_title": f"Strategic Advisory: {ticker} — {prompt[:60]}...",
                 "fiscal_year": datetime.now().year,
                 "fiscal_period": "CUSTOM",
@@ -234,8 +234,8 @@ class SEC8KFetcher:
         except: return []
 
 def discover_connections(ticker: str, sb: Client):
-    meta = TARGET_COMPANIES.get(ticker)
-    if not meta: return
+    meta = get_company_meta(ticker)
+    if not meta or not meta.get("cik"): return
     source_company = meta.get("name", ticker)  # required NOT NULL field
     fetcher = SEC8KFetcher(meta["cik"], ticker)
     for f in fetcher.get_8k_filings():
@@ -302,11 +302,11 @@ if __name__ == "__main__":
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     chain = ReportingChain(sb)
     
-    # Reload tickers from dynamic registry
-    from platform_config import load_target_companies
-    CURRENT_TICKERS = list(load_target_companies().keys())
+    # Scale-ready: fetch only necessary tickers if needed, or leave to args
+    tickers_to_run = [args.ticker] if args.ticker else []
     
-    tickers_to_run = [args.ticker] if args.ticker else CURRENT_TICKERS
+    if not tickers_to_run:
+        log.info("No ticker provided. In a scale-ready system, bulk runs are restricted.")
     
     for t in tickers_to_run:
         log.info(f"Generating report for {t}...")
