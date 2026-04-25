@@ -32,17 +32,22 @@ log = logging.getLogger("Intelligence")
 # ── 1. CORE GEMINI ORCHESTRATOR ──────────────────────────────────────────────
 
 def call_gemini(prompt: str, max_tokens: int = 4096, temperature: float = 0.2) -> str:
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
-    }
-    try:
-        resp = requests.post(f"{GEMINI_ENDPOINT}?key={GEMINI_API_KEY}", json=payload, timeout=60)
-        resp.raise_for_status()
-        return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as e:
-        log.error(f"Gemini failed: {e}")
-        return f"[Gemini Error: {e}]"
+    from platform_config import get_gemini_key
+    for _ in range(len(GEMINI_KEYS) if GEMINI_KEYS else 3):
+        current_key = get_gemini_key()
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+        }
+        try:
+            resp = requests.post(f"{GEMINI_ENDPOINT}?key={current_key}", json=payload, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception as e:
+            log.warning(f"Key failed, rotating... Error: {e}")
+            time.sleep(2)
+            continue
+    return "[Gemini Error: All keys exhausted or model overloaded]"
 
 # ── 2. REPORTING CHAIN AGENTS ────────────────────────────────────────────────
 
@@ -57,6 +62,7 @@ class ReportingChain:
         fin = self.db.table("financials").select("*").eq("ticker", ticker).order("end_date", desc=True).limit(5).execute().data or []
         news = self.db.table("market_intelligence").select("*").eq("ticker", ticker).order("published_at", desc=True).limit(20).execute().data or []
         conns = self.db.table("corporate_connections").select("*").eq("source_ticker", ticker).execute().data or []
+        docs = self.db.table("extracted_documents").select("*").eq("ticker", ticker).order("created_at", desc=True).limit(3).execute().data or []
         
         if not fin: return {"error": "No financial data"}
         
@@ -91,11 +97,12 @@ class ReportingChain:
             f"Corporate Connections: {len(conns)} relationships"
         )
         news_text = "\n".join([f"- {n.get('headline', '')} ({n.get('published_at','')[:10]})" for n in news[:15]])
+        docs_text = "\n".join([f"Source: {d.get('source_url', 'Doc')}\n{d.get('raw_text', '')[:1000]}" for d in docs])
         
         # 3. Generate Markdown report
         report_prompt = f"""You are an expert institutional equity research analyst.
 
-Generate a professional, institutional-grade equity research report for {ticker}.
+Generate a deep, professional, institutional-grade equity research report for {ticker} (Target: 800 - 1500 words).
 Report Period: {fp} {fy}
 
 FINANCIAL VAULT DATA:
@@ -104,11 +111,29 @@ FINANCIAL VAULT DATA:
 RECENT NEWS HEADLINES:
 {news_text}
 
-USER INSTRUCTIONS:
-{prompt or 'Generate a comprehensive equity research report covering: Executive Summary, Financial Performance Analysis, Key Risks, Growth Catalysts, and Investment Thesis.'}
+EXTRACTED DOCUMENTS:
+{docs_text}
 
-Format with clear Markdown headers (##). Be specific with numbers. Do NOT hallucinate data."""
-        report_md = call_gemini(report_prompt, max_tokens=5000)
+USER INSTRUCTIONS:
+{prompt or 'Analyze the company.'}
+
+REQUIRED REPORT SECTIONS:
+- Executive Summary
+- Business Overview
+- Financial Performance (Highlight Revenue YoY / QoQ and Margin trends)
+- Balance Sheet & Cash Flow
+- Peer Comparison (Sector Context)
+- News Impact
+- Corporate Ecosystem
+- Risks & Outlook
+
+STRICT RULES:
+- Use ONLY provided data. Do NOT hallucinate.
+- Cite numbers explicitly.
+- Avoid generic statements.
+- Ensure the tone is institutional.
+Format with clear Markdown headers (##)."""
+        report_md = call_gemini(report_prompt, max_tokens=8192)
         
         # 4. Compliance Audit — calculate score
         filled_metrics = sum(1 for v in [rev, ni, op, ca, eps, ta, te, tl] if v is not None)

@@ -17,8 +17,27 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ── API Keys & Endpoints ─────────────────────────────────────────────────────
-GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+GEMINI_KEYS = [
+    os.getenv(f"GEMINI_API_KEY_{i}") 
+    for i in range(1, 6) 
+    if os.getenv(f"GEMINI_API_KEY_{i}")
+]
+# Fallback to single key if no numbered keys found
+if not GEMINI_KEYS:
+    GEMINI_KEYS = [os.getenv("GEMINI_API_KEY", "")]
+
+# Used for round-robin rotation
+_key_counter = 0
+
+def get_gemini_key():
+    global _key_counter
+    if not GEMINI_KEYS: return ""
+    key = GEMINI_KEYS[_key_counter % len(GEMINI_KEYS)]
+    _key_counter += 1
+    return key
+
+GEMINI_API_KEY = GEMINI_KEYS[0] if GEMINI_KEYS else ""
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
 
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
 

@@ -67,6 +67,8 @@ def search_companies(query: str) -> List[Dict]:
 
 @st.cache_data(ttl=300)
 def load_uploaded_docs(ticker: str) -> List[Dict]:
+    if not ticker:
+        return []
     sb = get_supabase()
     try:
         res = sb.table("extracted_documents").select("*").eq("ticker", ticker).order("created_at", ascending=False).execute()
@@ -359,10 +361,10 @@ def get_all_sectors() -> List[str]:
 # ── Formatting ────────────────────────────────────────────────────────────────
 def fmt_b(v):
     if v is None: return "–"
-    if abs(v) >= 1e12: return f"${v/1e12:.2f}T"
-    if abs(v) >= 1e9:  return f"${v/1e9:.2f}B"
-    if abs(v) >= 1e6:  return f"${v/1e6:.2f}M"
-    return f"${v:,.0f}"
+    if abs(v) >= 1e12: return f"₹{v/1e12:.2f}T"
+    if abs(v) >= 1e7:  return f"₹{v/1e7:.2f}Cr"
+    if abs(v) >= 1e5:  return f"₹{v/1e5:.2f}L"
+    return f"₹{v:,.0f}"
 
 def delta_pct(old, new):
     if not old or not new or old == 0: return None
@@ -559,7 +561,7 @@ latest_fin = df_fy.iloc[-1].to_dict() if not df_fy.empty else {}
 prior_fin  = df_fy.iloc[-2].to_dict() if len(df_fy) > 1 else {}
 
 # ── Header ────────────────────────────────────────────────────────────────────
-if not ticker:
+if not ticker and view != "📥 Document Extractor":
     st.markdown("""
     <div style='text-align:center; padding:100px 20px;'>
         <div style='font-size:64px; margin-bottom:20px;'>🔍</div>
@@ -1206,30 +1208,32 @@ elif view == "📥 Document Extractor":
     # Input section (Hidden if extraction successful for a 'clean' look)
     extract_url_btn = False
     extract_file_btn = False
+    extract_yt_btn = False
     extract_url = None
     uploaded_file = None
+    extract_yt = None
     
     if "last_extraction" not in st.session_state:
         ext_col1, ext_col2 = st.columns(2)
 
         with ext_col1:
             st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>🌐 Extract from URL</div>", unsafe_allow_html=True)
-            extract_url = st.text_input("URL", placeholder="https://company.com/investor-relations or YouTube URL", label_visibility="collapsed", key="extract_url")
-            url_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="url_company")
-            url_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="url_ticker")
+            extract_url = st.text_input("URL", placeholder="https://company.com/investor-relations", label_visibility="collapsed", key="extract_url")
+            url_company = st.text_input("Company Name (Required)", placeholder="Enter Company Name", key="url_company")
+            url_ticker = st.text_input("Ticker (Required)", placeholder="Enter Ticker", key="url_ticker")
             extract_url_btn = st.button("🔍 Extract from URL", width='stretch', key="extract_url_btn")
 
         with ext_col2:
             st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>📎 Upload File</div>", unsafe_allow_html=True)
             uploaded_file = st.file_uploader("Upload", type=["pdf", "docx", "txt", "md"], label_visibility="collapsed", key="file_upload")
-            file_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="file_company")
-            file_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="file_ticker")
+            file_company = st.text_input("Company Name (Required)", placeholder="Enter Company Name", key="file_company")
+            file_ticker = st.text_input("Ticker (Required)", placeholder="Enter Ticker", key="file_ticker")
             extract_file_btn = st.button("📄 Extract from File", width='stretch', key="extract_file_btn")
     else:
         st.markdown("""
         <div style='background:rgba(63,185,80,0.1); border:1px solid #3fb950; border-radius:8px; padding:16px; margin-bottom:24px; text-align:center;'>
             <div style='color:#3fb950; font-size:24px; margin-bottom:8px;'>✨ Extraction Successful!</div>
-            <div style='color:#8b949e; font-size:14px;'>The data has been extracted, normalized to USD, and synchronized to the institutional vault.</div>
+            <div style='color:#8b949e; font-size:14px;'>The data has been extracted, normalized, and synchronized to the institutional vault.</div>
         </div>
         """, unsafe_allow_html=True)
         if st.button("🔄 New Extraction", width='stretch'):
@@ -1238,43 +1242,49 @@ elif view == "📥 Document Extractor":
 
     # Process URL extraction
     if extract_url_btn and extract_url:
-        with st.spinner("Extracting content and analyzing financials..."):
-            try:
-                engine = ExtractorEngine()
-                result = engine.process(
-                    extract_url,
-                    ticker_override=url_ticker,
-                    company_override=url_company
-                )
-                st.session_state["last_extraction"] = result
-                st.success("✅ Data stored in Supabase")
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                import traceback
-                with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
-                st.error(f"Extraction failed: {e}")
+        if not url_company or not url_ticker:
+            st.error("⚠️ Company Name and Ticker are required for URL extraction.")
+        else:
+            with st.spinner("Extracting content and analyzing financials..."):
+                try:
+                    engine = ExtractorEngine()
+                    result = engine.process(
+                        extract_url,
+                        ticker_override=url_ticker.strip().upper(),
+                        company_override=url_company.strip().upper()
+                    )
+                    st.session_state["last_extraction"] = result
+                    st.success("✅ Data stored in Supabase")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
+                    st.error(f"Extraction failed: {e}")
 
     # Process file extraction
     if extract_file_btn and uploaded_file:
-        with st.spinner("Parsing file and analyzing financials..."):
-            try:
-                engine = ExtractorEngine()
-                file_bytes = uploaded_file.getvalue()
-                result = engine.process(
-                    file_bytes,
-                    filename=uploaded_file.name,
-                    ticker_override=file_ticker,
-                    company_override=file_company
-                )
-                st.session_state["last_extraction"] = result
-                st.success("✅ Data stored in Supabase")
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                import traceback
-                with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
-                st.error(f"Extraction failed: {e}")
+        if not file_company or not file_ticker:
+            st.error("⚠️ Company Name and Ticker are required for File extraction.")
+        else:
+            with st.spinner("Parsing file and analyzing financials..."):
+                try:
+                    engine = ExtractorEngine()
+                    file_bytes = uploaded_file.getvalue()
+                    result = engine.process(
+                        file_bytes,
+                        filename=uploaded_file.name,
+                        ticker_override=file_ticker.strip().upper(),
+                        company_override=file_company.strip().upper()
+                    )
+                    st.session_state["last_extraction"] = result
+                    st.success("✅ Data stored in Supabase")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
+                    st.error(f"Extraction failed: {e}")
 
     # Display extraction results
     if "last_extraction" in st.session_state:
@@ -1287,30 +1297,33 @@ elif view == "📥 Document Extractor":
         elif result.get("status") == "SUCCESS":
             st.markdown("<div class='section-header'>EXTRACTION STATUS</div>", unsafe_allow_html=True)
             
+            with st.expander("🔍 Technical Audit (AI Insight)"):
+                st.json(result)
+            
             col1, col2, col3 = st.columns(3)
             
             col1.metric("Rows Extracted", "1")
             col2.metric("Rows Inserted", "1" if not result.get("rejected") else "0")
             # Calculate coverage from actual row data
-            row_data = result.get("row", {})
+            row_data = result.get("row") or {}
             _numeric_fields = ["revenue", "net_income", "operating_income", "total_assets",
                                "total_liabilities", "total_equity", "cash_on_hand", "eps_diluted"]
             _filled = sum(1 for f in _numeric_fields if row_data.get(f) is not None)
-            cov = (_filled / len(_numeric_fields)) * 100
+            cov = (_filled / len(_numeric_fields)) * 100 if len(_numeric_fields) > 0 else 0
             col3.metric("Coverage %", f"{cov:.0f}%")
             
-            st.markdown("### Data Preview")
-            if "row" in result:
+            t1, t2, t3 = st.tabs(["Structured Financials", "Text Preview", "JSON Structure"])
+            with t1:
+                st.markdown("### Financial Highlights")
                 import pandas as pd
-                df = pd.DataFrame([result["row"]])
+                df = pd.DataFrame([result.get("row", {})])
                 st.dataframe(df)
-            
-            with st.expander("⚠️ Debug Info"):
-                st.json({
-                    "mapped_fields": result.get("mapped_fields", {}),
-                    "unmapped_fields": result.get("unmapped_fields", {}),
-                    "rejected_rows": result.get("rejected", {})
-                })
+            with t2:
+                st.markdown("### Raw Extraction Preview")
+                st.text_area("Content", result.get("raw_text", "")[:10000], height=300)
+            with t3:
+                st.markdown("### JSON Metadata & Sections")
+                st.json(result.get("analysis", {}))
 
     # NEW: VAULT BROWSER
     st.markdown("<div class='section-header'>📂 VAULTED INTELLIGENCE BROWSER</div>", unsafe_allow_html=True)
@@ -1367,11 +1380,18 @@ elif view == "📝 Report Builder":
             "* Risks\n* Forward outlook\n\nUse only available data. Do not hallucinate."
         )
         user_prompt = st.text_area(
-            "Prompt / Instructions:",
+            "Primary Request / Instructions:",
             value=default_prompt,
-            height=140,
+            height=100,
             help="Customize what the report should focus on.",
         )
+        
+        with st.expander("⚙️ Advanced Prompt Configuration"):
+            st.markdown("Override the base prompts used during generation.")
+            sys_reporting_prompt_override = st.text_area("System Reporting Prompt", 
+                value="You are an expert institutional equity research analyst. Generate a deep, professional report. Target: 800-1500 words.", height=80)
+            summarization_prompt = st.text_area("Context Summarization Prompt", 
+                value="Summarize the core financial facts, business highlights, and forward-looking risks from this text.", height=80)
 
         # NEW: CONTEXT SELECTOR
         st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>🧠 INCLUDE VAULTED KNOWLEDGE</div>", unsafe_allow_html=True)
