@@ -16,6 +16,9 @@ New in v2:
 
 import os
 import subprocess
+import time
+import sys
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 import streamlit as st # type: ignore
 import pandas as pd # type: ignore
 import plotly.graph_objects as go # type: ignore
@@ -30,18 +33,42 @@ from typing import List, Dict, Optional, Any, cast
 import platform_config
 from platform_config import ( # type: ignore
     SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY, GEMINI_ENDPOINT,
-    TARGET_COMPANIES, COMPANY_ICONS, SECTOR_ICONS, load_target_companies
+    TARGET_COMPANIES, SECTOR_ICONS, load_target_companies, get_company_meta
 )
 # Consolidated Modules
 from ingest import ExtractorEngine
 from intelligence import render_ecosystem_graph
 from utils import build_sec_ix_url, backfill_sec_urls
 
-# Refresh companies from registry
+# Initial companies (limited for search context)
 TARGET_COMPANIES = load_target_companies()
-TARGET_TICKERS = list(TARGET_COMPANIES.keys())
 
+@st.cache_data(ttl=300)
+def search_companies(query: str) -> List[Dict]:
+    """Scalable company search — works for 5 or 8,000+ companies. Filter-first, lazy-loaded."""
+    sb = get_supabase()
+    try:
+        if not query or len(query) < 1:
+            # Return all current companies but capped at 50 (safe for any scale)
+            res = sb.table("target_companies").select("ticker, company_name, sector").limit(50).execute()
+        else:
+            # ILIKE search — uses DB-level filtering (index-ready)
+            res = sb.table("target_companies").select("ticker, company_name, sector").or_(
+                f"ticker.ilike.%{query}%,company_name.ilike.%{query}%"
+            ).limit(20).execute()
+        return res.data or []
+    except:
+        # Fallback to local config if DB unreachable
+        results = []
+        for t, m in TARGET_COMPANIES.items():
+            if query.lower() in t.lower() or query.lower() in m["name"].lower():
+                results.append({"ticker": t, "company_name": m["name"], "sector": m.get("sector", "")})
+        return results
+
+@st.cache_data(ttl=300)
 def load_uploaded_docs(ticker: str) -> List[Dict]:
+    if not ticker:
+        return []
     sb = get_supabase()
     try:
         res = sb.table("extracted_documents").select("*").eq("ticker", ticker).order("created_at", ascending=False).execute()
@@ -277,28 +304,40 @@ def load_latest_report(ticker: str) -> dict | None:
     data = load_all_reports(ticker)
     return data[0] if data else None
 
-@st.cache_data(ttl=30)
-def load_sector_snapshot() -> pd.DataFrame:
-    """Loads latest FY record per company for sector heatmap."""
-    rows = []
-    for ticker, meta in TARGET_COMPANIES.items():
-        # Try FY first
-        fins = (supabase.table("financials").select("*")
-                .eq("ticker", ticker).eq("fiscal_period", "FY")
-                .order("end_date", desc=True).limit(1).execute().data or [])
+@st.cache_data(ttl=600)
+def load_sector_snapshot(sector: str) -> pd.DataFrame:
+    """Scale-ready: Loads latest FY record for companies in a specific sector."""
+    if not sector or sector == "-- Select Sector --":
+        return pd.DataFrame()
         
-        # Fallback to latest available (e.g. 10-Q) if no FY found
-        if not fins:
-            fins = (supabase.table("financials").select("*")
-                    .eq("ticker", ticker)
-                    .order("end_date", desc=True).limit(1).execute().data or [])
-            
+    sb = get_supabase()
+    # 1. Fetch companies in sector
+    query = sb.table("target_companies").select("ticker, company_name, sector").eq("sector", sector)
+    if sector == "All":
+        query = sb.table("target_companies").select("ticker, company_name, sector").limit(100)
+    
+    co_res = query.execute()
+    if not co_res.data:
+        return pd.DataFrame()
+        
+    rows = []
+    for co in co_res.data:
+        t = co["ticker"]
+        # Fetch latest metrics for this ticker
+        fins = (sb.table("financials").select("*")
+                .eq("ticker", t)
+                .order("end_date", desc=True).limit(1).execute().data or [])
+                
         if fins:
             r = fins[0]
+            # Ensure sector is never None for Plotly hierarchy
+            sec_val = co.get("sector")
+            if not sec_val: sec_val = "Uncategorized"
+                
             rows.append({
-                "ticker":     ticker,
-                "company":    meta["name"],
-                "sector":     meta["sector"],
+                "ticker":     t,
+                "company":    co["company_name"],
+                "sector":     sec_val,
                 "revenue":    r.get("revenue"),
                 "net_income": r.get("net_income"),
                 "op_income":  r.get("operating_income"),
@@ -309,13 +348,23 @@ def load_sector_snapshot() -> pd.DataFrame:
             })
     return pd.DataFrame(rows)
 
+@st.cache_data(ttl=3600)
+def get_all_sectors() -> List[str]:
+    """Fetches unique sectors from target_companies table."""
+    sb = get_supabase()
+    try:
+        res = sb.table("target_companies").select("sector").execute()
+        return sorted(list(set(r["sector"] for r in res.data if r.get("sector"))))
+    except:
+        return ["Technology", "Financials", "Healthcare", "Energy"] # Fallback
+
 # ── Formatting ────────────────────────────────────────────────────────────────
 def fmt_b(v):
     if v is None: return "–"
-    if abs(v) >= 1e12: return f"${v/1e12:.2f}T"
-    if abs(v) >= 1e9:  return f"${v/1e9:.2f}B"
-    if abs(v) >= 1e6:  return f"${v/1e6:.2f}M"
-    return f"${v:,.0f}"
+    if abs(v) >= 1e12: return f"₹{v/1e12:.2f}T"
+    if abs(v) >= 1e7:  return f"₹{v/1e7:.2f}Cr"
+    if abs(v) >= 1e5:  return f"₹{v/1e5:.2f}L"
+    return f"₹{v:,.0f}"
 
 def delta_pct(old, new):
     if not old or not new or old == 0: return None
@@ -382,22 +431,84 @@ with st.sidebar:
     # We use a placeholder for now or just check a hidden state if needed, 
     # but the simplest way is to just put company selection above NO MATTER WHAT.
     
-    st.markdown("<div class='section-header'>TARGET COMPANY</div>", unsafe_allow_html=True)
+    # ── Simplified Search Selector (Suggestions / Autocomplete) ──
+    # Sort labels for better searchability
+    target_options = {f"{m['name']} ({t})": t for t, m in TARGET_COMPANIES.items()}
+    sorted_labels = sorted(target_options.keys())
     
-    # Pre-calculate company options WITHOUT EMOJIS
-    company_options = {}
-    for t in sorted(TARGET_COMPANIES.keys()):
-        m = TARGET_COMPANIES[t]
-        label = f"{m['name']} ({t}) — {m.get('sector', 'N/A')}"
-        company_options[label] = t
+    ticker = st.session_state.get("selected_ticker")
+    
+    # Placeholder index logic
+    default_idx = None
+    if ticker:
+        current_label = next((l for l, t in target_options.items() if t == ticker), None)
+        if current_label and current_label in sorted_labels:
+            default_idx = sorted_labels.index(current_label)
 
-    selected_label = st.selectbox("Company", list(company_options.keys()), label_visibility="collapsed", index=0)
-    ticker = company_options[selected_label]
+    sel_label = st.selectbox(
+        "🔍 Search company...",
+        options=sorted_labels,
+        index=default_idx,
+        placeholder="Type name or ticker (e.g. MSFT)...",
+        label_visibility="collapsed",
+        key="search_autocomplete"
+    )
+    
+    if sel_label:
+        ticker = target_options[sel_label]
+        st.session_state.selected_ticker = ticker
+    
+    if not ticker:
+        st.info("👋 Type to search for a stock.")
+    
+    # ── "Add New" Flow (Can't find it?) ──
+    with st.expander("✨ Discover & Add Ticker"):
+        new_ticker = st.text_input("Ticker Symbol", placeholder="e.g. NVDA", key="new_ticker_input").upper().strip()
+        
+        if new_ticker:
+            # Check local cache first
+            if new_ticker in TARGET_COMPANIES:
+                st.success(f"✓ {new_ticker} is already in your dashboard.")
+            else:
+                if st.button(f"🔍 Discovery {new_ticker}", key="discover_btn"):
+                    with st.spinner("Searching SEC registry..."):
+                        try:
+                            # Step 1: SEC Discovery (FAST - returns in seconds)
+                            res = subprocess.run(
+                                [sys.executable, "ingest.py", "--ticker", new_ticker, "--sec-only"], 
+                                capture_output=True, text=True,
+                                cwd=APP_DIR
+                            )
+                            
+                            if "DISCOVERY_ERROR" in res.stdout or "DISCOVERY_ERROR" in res.stderr:
+                                st.error(f"❌ {new_ticker} not found in SEC registry. Please check the symbol.")
+                            elif res.returncode == 0:
+                                st.toast(f"✅ {new_ticker} Enrolled Successfully!")
+                                st.success(f"🎊 {new_ticker} discovered and enrolled!")
+                                
+                                # Step 2: Background News Ingestion (Truly asynchronous)
+                                subprocess.Popen(
+                                    [sys.executable, "ingest.py", "--ticker", new_ticker, "--news-only"],
+                                    cwd=APP_DIR,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL
+                                )
+                                
+                                st.info("Financials synced. News & Intelligence is populating in the background.")
+                                st.session_state.selected_ticker = new_ticker
+                                # Clear cache to show new company in dropdown
+                                st.cache_data.clear()
+                                time.sleep(2) # Visual beat
+                                st.rerun()
+                            else:
+                                st.error(f"Ingestion failed: {res.stderr[:200]}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
     # Watchlist toggle
     in_watchlist = ticker in st.session_state.watchlist
     wl_label = "⭐ Remove from Watchlist" if in_watchlist else "☆ Add to Watchlist"
-    if st.button(wl_label, use_container_width=True):
+    if st.button(wl_label, width='stretch'):
         if in_watchlist: st.session_state.watchlist.discard(ticker)
         else: st.session_state.watchlist.add(ticker)
         st.rerun()
@@ -418,7 +529,7 @@ with st.sidebar:
     if view == "📥 Document Extractor":
         st.info("💡 Running in **Vault Mode**. Extracted data will be automatically cataloged.")
 
-    if st.button("🔄 Refresh Data", use_container_width=True):
+    if st.button("🔄 Refresh Data", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
@@ -450,14 +561,24 @@ latest_fin = df_fy.iloc[-1].to_dict() if not df_fy.empty else {}
 prior_fin  = df_fy.iloc[-2].to_dict() if len(df_fy) > 1 else {}
 
 # ── Header ────────────────────────────────────────────────────────────────────
+if not ticker and view != "📥 Document Extractor":
+    st.markdown("""
+    <div style='text-align:center; padding:100px 20px;'>
+        <div style='font-size:64px; margin-bottom:20px;'>🔍</div>
+        <div style='font-size:24px; font-weight:800; color:#c9d1d9;'>Search for a company to begin analysis</div>
+        <div style='color:#8b949e; margin-top:8px;'>Use the sidebar to lookup 8,000+ companies in the SEC database.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
 if view != "📥 Document Extractor":
-    ticker_meta = TARGET_COMPANIES.get(ticker, {})
+    ticker_meta = get_company_meta(ticker)
     status_badge = badge(latest_report.get("verification_status", "PENDING")) if latest_report else badge("PENDING")
 
     st.markdown(f"""
     <div style='display:flex; align-items:flex-end; gap:12px; margin-bottom:4px;'>
         <div style='font-size:36px; font-weight:900; color:#f0f6fc; line-height:1;'>{ticker}</div>
-        <div style='font-size:18px; font-weight:600; color:#c9d1d9; border-left:1px solid rgba(255,255,255,0.1); padding-left:12px; margin-bottom:2px;'>{company_names.get(ticker,'')}</div>
+        <div style='font-size:18px; font-weight:600; color:#c9d1d9; border-left:1px solid rgba(255,255,255,0.1); padding-left:12px; margin-bottom:2px;'>{ticker_meta.get('name','')}</div>
     </div>
     <div style='font-size:11px; color:#8b949e; letter-spacing:0.05em; display:flex; align-items:center; gap:12px;'>
         <span>Sector: <b style='color:#58a6ff;'>{ticker_meta.get('sector','N/A')}</b></span>
@@ -483,20 +604,29 @@ if view == "📊 Financial Overview":
     # Task 2-A: UI-triggered pipeline button
     col_hdr, col_btn = st.columns([3, 1])
     with col_btn:
-        if st.button("🔄 Fetch Latest Financials", use_container_width=True, key="fetch_financials_btn"):
-            try:
-                # Updated to point to the consolidated ingest.py
-                subprocess.run(
-                    ["python", "ingest.py", "--ticker", ticker, "--sec-only"],
-                    check=False, timeout=120,
-                )
-            except Exception as e:
-                st.error(f"Ingestor error: {e}")
-            st.cache_data.clear()
-            st.rerun()
+        if st.button("🔄 Fetch Latest Financials", width='stretch', key="fetch_financials_btn"):
+            with st.spinner(f"Updating data for {ticker}..."):
+                try:
+                    # Updated to point to the consolidated ingest.py
+                    res = subprocess.run(
+                        [sys.executable, "ingest.py", "--ticker", ticker, "--sec-only"],
+                        capture_output=True, text=True, timeout=150,
+                        cwd=APP_DIR
+                    )
+                    
+                    if res.returncode != 0:
+                        st.error(f"⚠️ Ingestion Failed: {res.stderr[:300]}")
+                    else:
+                        st.toast("✓ Financial metrics updated!")
+                        st.success("Analysis engine synchronized with latest SEC filings.")
+                        st.cache_data.clear()
+                        time.sleep(1.5)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Execution error: {e}")
 
     if not latest_fin:
-        st.warning("⚠️ No financial data found. Run `python financial_ingestor.py` first.")
+        st.warning(f"⚠️ No financial data found for {ticker}. Use the 'Fetch Latest Financials' button above to initialize.")
         st.stop()
 
     rev = latest_fin.get("revenue")
@@ -565,7 +695,7 @@ if view == "📊 Financial Overview":
                           xaxis={"gridcolor": "#21262d"},
                           yaxis={"gridcolor": "#21262d", "title": "USD Billions"},
                           margin={"l": 0, "r": 0, "t": 10, "b": 0}, hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Balance sheet
     st.markdown("<div class='section-header'>BALANCE SHEET COMPOSITION</div>", unsafe_allow_html=True)
@@ -634,7 +764,7 @@ elif view == "📈 Quarterly Drill-Down":
                             xaxis={"gridcolor": "#21262d"},
                             yaxis={"gridcolor": "#21262d", "title": "Revenue (USD Billions)"},
                             margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_q, use_container_width=True)
+        st.plotly_chart(fig_q, width='stretch')
 
         # Net Income by quarter
         st.markdown("<div class='section-header'>QUARTERLY NET INCOME</div>", unsafe_allow_html=True)
@@ -651,7 +781,7 @@ elif view == "📈 Quarterly Drill-Down":
                               xaxis={"gridcolor": "#21262d"},
                               yaxis={"gridcolor": "#21262d", "title": "Net Income (Billions)"},
                               margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_ni, use_container_width=True)
+        st.plotly_chart(fig_ni, width='stretch')
 
         # Quarterly data table
         st.markdown("<div class='section-header'>QUARTERLY RAW DATA</div>", unsafe_allow_html=True)
@@ -669,7 +799,7 @@ elif view == "📈 Quarterly Drill-Down":
         
         st.dataframe(
             df_show.set_index("Label"),
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "Sec Filing Url": st.column_config.LinkColumn(
                     "SEC Filing",
@@ -684,80 +814,75 @@ elif view == "📈 Quarterly Drill-Down":
 # ════════════════════════════════════════════════════════════
 # VIEW 3: SECTOR HEATMAP
 # ════════════════════════════════════════════════════════════
+# ── VIEW 3: SECTOR HEATMAP ────────────────────────────────────
 elif view == "🌍 Sector Heatmap":
     st.markdown("<div class='section-header'>CROSS-COMPANY SECTOR SNAPSHOT</div>", unsafe_allow_html=True)
 
-    with st.spinner("Loading sector data..."):
-        df_sector = load_sector_snapshot()
+    sec_col1, sec_col2 = st.columns(2)
+    with sec_col1:
+        metric_choice = st.selectbox("Metric to visualise",
+            ["revenue", "net_income", "op_income", "cash", "equity", "assets"])
+    with sec_col2:
+        sectors = get_all_sectors()
+        selected_sector = st.selectbox("Filter by sector", ["-- Select Sector --", "All"] + sectors)
+
+    if selected_sector == "-- Select Sector --":
+        st.info("💡 Select a sector to view the latest financial snapshot across companies.")
+        st.stop()
+
+    with st.spinner(f"Loading {selected_sector} snapshot..."):
+        df_sector = load_sector_snapshot(selected_sector)
 
     if df_sector.empty:
-        st.warning("No data available. Run the ingestor first.")
+        st.warning(f"No financial data available for {selected_sector} yet.")
     else:
-        col_m, col_s = st.columns(2)
-        with col_m:
-            metric_choice = st.selectbox("Metric to visualise",
-                ["revenue", "net_income", "op_income", "cash", "equity", "assets"])
-        with col_s:
-            all_sectors = sorted(df_sector["sector"].dropna().unique().tolist())
-            selected_sector = st.selectbox("Filter by sector", ["All"] + all_sectors)
-
-        # Metric label map
         label_map = {
             "revenue": "Annual Revenue",  "net_income": "Net Income",
             "op_income": "Operating Income", "cash": "Cash & Equivalents",
             "equity": "Total Equity",    "assets": "Total Assets",
         }
 
-        df_heat = df_sector.copy().dropna(subset=[metric_choice])
-        if selected_sector != "All":
-            df_heat = df_heat[df_heat["sector"] == selected_sector]
+        df_heat = df_sector.copy().dropna(subset=[metric_choice, "sector"])
 
         if df_heat.empty:
-            st.warning(f"No data available for {selected_sector} in the heatmap.")
+            st.warning(f"No data points for {metric_choice} in {selected_sector}.")
         else:
             df_heat["value_fmt"] = df_heat[metric_choice].apply(fmt_b)
             df_heat["value_b"]   = df_heat[metric_choice] / 1e9
 
-        fig_heat = px.treemap(
-            df_heat,
-            path=["sector", "ticker"],
-            values="value_b",
-            color="value_b",
-            color_continuous_scale=[[0,"#1c2128"], [0.5,"#1f6feb"], [1,"#3fb950"]],
-            custom_data=["company", "value_fmt"],
-            title=f"Sector Treemap — {label_map[metric_choice]}",
-        )
-        fig_heat.update_traces(
-            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>",
-            texttemplate="<b>%{label}</b><br>%{customdata[1]}",
-            textfont_size=13,
-        )
-        fig_heat.update_layout(
-            paper_bgcolor="#0d1117", font={"color": "#c9d1d9"},
-            margin={"l": 0, "r": 0, "t": 40, "b": 0}, height=420,
-            coloraxis_showscale=False,
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
+            fig_heat = px.treemap(
+                df_heat, path=["sector", "ticker"], values="value_b",
+                color="value_b", color_continuous_scale=[[0,"#1c2128"], [0.5,"#1f6feb"], [1,"#3fb950"]],
+                custom_data=["company", "value_fmt"],
+                title=f"Sector Treemap — {label_map[metric_choice]}",
+            )
+            fig_heat.update_traces(
+                hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>",
+                texttemplate="<b>%{label}</b><br>%{customdata[1]}", textfont_size=13,
+            )
+            fig_heat.update_layout(
+                paper_bgcolor="#0d1117", font={"color": "#c9d1d9"},
+                margin={"l": 0, "r": 0, "t": 40, "b": 0}, height=420, coloraxis_showscale=False,
+            )
+            st.plotly_chart(fig_heat, width='stretch')
 
-        # Metrics comparison table
-        st.markdown("<div class='section-header'>COMPARISON TABLE (LATEST FY)</div>", unsafe_allow_html=True)
-
-        table_data = []
-        for _, row in df_heat.iterrows():
-            nm = (row["net_income"]/row.get("revenue")*100) if (row["net_income"] and row.get("revenue")) else None
-            roe = (row["net_income"]/row["equity"]*100) if (row["net_income"] and row["equity"]) else None
-            table_data.append({
-                "Ticker":    row["ticker"],
-                "Company":   row["company"],
-                "Sector":    row["sector"],
-                "Revenue":   fmt_b(row.get("revenue")),
-                "Net Income": fmt_b(row["net_income"]),
-                "Net Margin": f"{nm:.1f}%" if nm else "–",
-                "ROE":        f"{roe:.1f}%" if roe else "–",
-                "Cash":       fmt_b(row["cash"]),
-                "EPS":        f"${row['eps']:.2f}" if row["eps"] else "–",
-            })
-        st.dataframe(pd.DataFrame(table_data).set_index("Ticker"), use_container_width=True)
+            st.markdown(f"<div class='section-header'>COMPARISON TABLE — {selected_sector}</div>", unsafe_allow_html=True)
+            table_data = []
+            for _, row in df_heat.iterrows():
+                nm = (row["net_income"]/row["revenue"]*100) if (row["net_income"] and row.get("revenue")) else None
+                roe = (row["net_income"]/row["equity"]*100) if (row["net_income"] and row["equity"]) else None
+                table_data.append({
+                    "Ticker":    row["ticker"],
+                    "Company":   row["company"],
+                    "Sector":    row["sector"],
+                    "Revenue":   fmt_b(row.get("revenue")),
+                    "Net Income": fmt_b(row["net_income"]),
+                    "Net Margin": f"{nm:.1f}%" if nm else "–",
+                    "ROE":        f"{roe:.1f}%" if roe else "–",
+                    "Cash":       fmt_b(row.get("cash")),
+                    "EPS":        f"${row['eps']:.2f}" if row.get("eps") else "–",
+                })
+            st.dataframe(pd.DataFrame(table_data).set_index("Ticker"), use_container_width=True)
 
         # Grouped bar — Revenue vs Net Income
         sector_label = selected_sector if selected_sector != "All" else "ALL SECTORS"
@@ -773,7 +898,7 @@ elif view == "🌍 Sector Heatmap":
                                xaxis={"gridcolor": "#21262d"},
                                yaxis={"gridcolor": "#21262d", "title": "USD Billions"},
                                margin={"l": 0, "r": 0, "t": 10, "b": 0})
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
 
 
 # ════════════════════════════════════════════════════════════
@@ -785,7 +910,7 @@ elif view == "🌐 Corporate Ecosystem":
     # Task 2-C: UI-triggered ecosystem pipeline
     eco_hdr, eco_btn_col = st.columns([3, 1])
     with eco_btn_col:
-        if st.button("🌐 Update Ecosystem", use_container_width=True, key="update_ecosystem_btn"):
+        if st.button("🌐 Update Ecosystem", width='stretch', key="update_ecosystem_btn"):
             with st.spinner("⏳ Scanning SEC 8-K filings for new relationships…"):
                 try:
                     subprocess.run(
@@ -859,7 +984,7 @@ elif view == "📰 Intelligence Feed":
     # Task 2-B: Refresh News pipeline button
     feed_col, btn_col = st.columns([3, 1])
     with btn_col:
-        if st.button("📰 Refresh News", use_container_width=True, key="refresh_news_btn"):
+        if st.button("📰 Refresh News", width='stretch', key="refresh_news_btn"):
             try:
                 subprocess.run(
                     ["python", "ingest.py", "--ticker", ticker, "--news-only"],
@@ -947,7 +1072,7 @@ elif view == "📋 Report Archive":
     # Task 2-D: UI-triggered report generation pipeline
     arc_hdr, arc_btn_col = st.columns([3, 1])
     with arc_btn_col:
-        if st.button("📊 Generate Reports", use_container_width=True, key="gen_reports_btn"):
+        if st.button("📊 Generate Reports", width='stretch', key="gen_reports_btn"):
             with st.spinner("⏳ Running 5-agent reporting pipeline… (this may take ~2 minutes)"):
                 try:
                     subprocess.run(
@@ -1029,7 +1154,7 @@ elif view == "📋 Report Archive":
             if snap:
                 with st.expander("📊 Data Snapshot used for verification"):
                     snap_df = pd.DataFrame([{"Metric": k, "Value": v} for k, v in snap.items()])
-                    st.dataframe(snap_df.set_index("Metric"), use_container_width=True)
+                    st.dataframe(snap_df.set_index("Metric"), width='stretch')
 
             # SEC link
             sec_url = r.get("sec_filing_url")
@@ -1070,7 +1195,7 @@ elif view == "📋 Report Archive":
                                    xaxis={"gridcolor": "#21262d"},
                                    yaxis={"gridcolor": "#21262d", "title": "Compliance Score", "range": [0, 105]},
                                    margin={"l": 0, "r": 0, "t": 10, "b": 0})
-            st.plotly_chart(fig_comp, use_container_width=True)
+            st.plotly_chart(fig_comp, width='stretch')
 
 
 # ════════════════════════════════════════════════════════════
@@ -1083,75 +1208,83 @@ elif view == "📥 Document Extractor":
     # Input section (Hidden if extraction successful for a 'clean' look)
     extract_url_btn = False
     extract_file_btn = False
+    extract_yt_btn = False
     extract_url = None
     uploaded_file = None
+    extract_yt = None
     
     if "last_extraction" not in st.session_state:
         ext_col1, ext_col2 = st.columns(2)
 
         with ext_col1:
             st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>🌐 Extract from URL</div>", unsafe_allow_html=True)
-            extract_url = st.text_input("URL", placeholder="https://company.com/investor-relations or YouTube URL", label_visibility="collapsed", key="extract_url")
-            url_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="url_company")
-            url_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="url_ticker")
-            extract_url_btn = st.button("🔍 Extract from URL", use_container_width=True, key="extract_url_btn")
+            extract_url = st.text_input("URL", placeholder="https://company.com/investor-relations", label_visibility="collapsed", key="extract_url")
+            url_company = st.text_input("Company Name (Required)", placeholder="Enter Company Name", key="url_company")
+            url_ticker = st.text_input("Ticker (Required)", placeholder="Enter Ticker", key="url_ticker")
+            extract_url_btn = st.button("🔍 Extract from URL", width='stretch', key="extract_url_btn")
 
         with ext_col2:
             st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>📎 Upload File</div>", unsafe_allow_html=True)
             uploaded_file = st.file_uploader("Upload", type=["pdf", "docx", "txt", "md"], label_visibility="collapsed", key="file_upload")
-            file_company = st.text_input("Company Name (optional)", placeholder="Auto-detect if blank", key="file_company")
-            file_ticker = st.text_input("Ticker (optional)", placeholder="Auto-detect if blank", key="file_ticker")
-            extract_file_btn = st.button("📄 Extract from File", use_container_width=True, key="extract_file_btn")
+            file_company = st.text_input("Company Name (Required)", placeholder="Enter Company Name", key="file_company")
+            file_ticker = st.text_input("Ticker (Required)", placeholder="Enter Ticker", key="file_ticker")
+            extract_file_btn = st.button("📄 Extract from File", width='stretch', key="extract_file_btn")
     else:
         st.markdown("""
         <div style='background:rgba(63,185,80,0.1); border:1px solid #3fb950; border-radius:8px; padding:16px; margin-bottom:24px; text-align:center;'>
             <div style='color:#3fb950; font-size:24px; margin-bottom:8px;'>✨ Extraction Successful!</div>
-            <div style='color:#8b949e; font-size:14px;'>The data has been extracted, normalized to USD, and synchronized to the institutional vault.</div>
+            <div style='color:#8b949e; font-size:14px;'>The data has been extracted, normalized, and synchronized to the institutional vault.</div>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("🔄 New Extraction", use_container_width=True):
+        if st.button("🔄 New Extraction", width='stretch'):
             del st.session_state["last_extraction"]
             st.rerun()
 
     # Process URL extraction
     if extract_url_btn and extract_url:
-        with st.spinner("Extracting content and analyzing financials..."):
-            try:
-                engine = ExtractorEngine()
-                result = engine.process(
-                    extract_url,
-                    ticker_override=url_ticker,
-                    company_override=url_company
-                )
-                st.session_state["last_extraction"] = result
-                st.success("✅ Data stored in Supabase")
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                import traceback
-                with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
-                st.error(f"Extraction failed: {e}")
+        if not url_company or not url_ticker:
+            st.error("⚠️ Company Name and Ticker are required for URL extraction.")
+        else:
+            with st.spinner("Extracting content and analyzing financials..."):
+                try:
+                    engine = ExtractorEngine()
+                    result = engine.process(
+                        extract_url,
+                        ticker_override=url_ticker.strip().upper(),
+                        company_override=url_company.strip().upper()
+                    )
+                    st.session_state["last_extraction"] = result
+                    st.success("✅ Data stored in Supabase")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
+                    st.error(f"Extraction failed: {e}")
 
     # Process file extraction
     if extract_file_btn and uploaded_file:
-        with st.spinner("Parsing file and analyzing financials..."):
-            try:
-                engine = ExtractorEngine()
-                file_bytes = uploaded_file.getvalue()
-                result = engine.process(
-                    file_bytes,
-                    filename=uploaded_file.name,
-                    ticker_override=file_ticker,
-                    company_override=file_company
-                )
-                st.session_state["last_extraction"] = result
-                st.success("✅ Data stored in Supabase")
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                import traceback
-                with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
-                st.error(f"Extraction failed: {e}")
+        if not file_company or not file_ticker:
+            st.error("⚠️ Company Name and Ticker are required for File extraction.")
+        else:
+            with st.spinner("Parsing file and analyzing financials..."):
+                try:
+                    engine = ExtractorEngine()
+                    file_bytes = uploaded_file.getvalue()
+                    result = engine.process(
+                        file_bytes,
+                        filename=uploaded_file.name,
+                        ticker_override=file_ticker.strip().upper(),
+                        company_override=file_company.strip().upper()
+                    )
+                    st.session_state["last_extraction"] = result
+                    st.success("✅ Data stored in Supabase")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    with open('err.log', 'w') as errf: errf.write(traceback.format_exc())
+                    st.error(f"Extraction failed: {e}")
 
     # Display extraction results
     if "last_extraction" in st.session_state:
@@ -1164,30 +1297,33 @@ elif view == "📥 Document Extractor":
         elif result.get("status") == "SUCCESS":
             st.markdown("<div class='section-header'>EXTRACTION STATUS</div>", unsafe_allow_html=True)
             
+            with st.expander("🔍 Technical Audit (AI Insight)"):
+                st.json(result)
+            
             col1, col2, col3 = st.columns(3)
             
             col1.metric("Rows Extracted", "1")
             col2.metric("Rows Inserted", "1" if not result.get("rejected") else "0")
             # Calculate coverage from actual row data
-            row_data = result.get("row", {})
+            row_data = result.get("row") or {}
             _numeric_fields = ["revenue", "net_income", "operating_income", "total_assets",
                                "total_liabilities", "total_equity", "cash_on_hand", "eps_diluted"]
             _filled = sum(1 for f in _numeric_fields if row_data.get(f) is not None)
-            cov = (_filled / len(_numeric_fields)) * 100
+            cov = (_filled / len(_numeric_fields)) * 100 if len(_numeric_fields) > 0 else 0
             col3.metric("Coverage %", f"{cov:.0f}%")
             
-            st.markdown("### Data Preview")
-            if "row" in result:
+            t1, t2, t3 = st.tabs(["Structured Financials", "Text Preview", "JSON Structure"])
+            with t1:
+                st.markdown("### Financial Highlights")
                 import pandas as pd
-                df = pd.DataFrame([result["row"]])
+                df = pd.DataFrame([result.get("row", {})])
                 st.dataframe(df)
-            
-            with st.expander("⚠️ Debug Info"):
-                st.json({
-                    "mapped_fields": result.get("mapped_fields", {}),
-                    "unmapped_fields": result.get("unmapped_fields", {}),
-                    "rejected_rows": result.get("rejected", {})
-                })
+            with t2:
+                st.markdown("### Raw Extraction Preview")
+                st.text_area("Content", result.get("raw_text", "")[:10000], height=300)
+            with t3:
+                st.markdown("### JSON Metadata & Sections")
+                st.json(result.get("analysis", {}))
 
     # NEW: VAULT BROWSER
     st.markdown("<div class='section-header'>📂 VAULTED INTELLIGENCE BROWSER</div>", unsafe_allow_html=True)
@@ -1202,7 +1338,7 @@ elif view == "📥 Document Extractor":
         
         st.dataframe(
             doc_df,
-            use_container_width=True,
+            width='stretch',
             column_config={
                 "Vault Link": st.column_config.LinkColumn(
                     "🏦 Vault Link",
@@ -1244,11 +1380,18 @@ elif view == "📝 Report Builder":
             "* Risks\n* Forward outlook\n\nUse only available data. Do not hallucinate."
         )
         user_prompt = st.text_area(
-            "Prompt / Instructions:",
+            "Primary Request / Instructions:",
             value=default_prompt,
-            height=140,
+            height=100,
             help="Customize what the report should focus on.",
         )
+        
+        with st.expander("⚙️ Advanced Prompt Configuration"):
+            st.markdown("Override the base prompts used during generation.")
+            sys_reporting_prompt_override = st.text_area("System Reporting Prompt", 
+                value="You are an expert institutional equity research analyst. Generate a deep, professional report. Target: 800-1500 words.", height=80)
+            summarization_prompt = st.text_area("Context Summarization Prompt", 
+                value="Summarize the core financial facts, business highlights, and forward-looking risks from this text.", height=80)
 
         # NEW: CONTEXT SELECTOR
         st.markdown("<div style='color:#c9d1d9; font-size:13px; font-weight:600; margin-bottom:8px;'>🧠 INCLUDE VAULTED KNOWLEDGE</div>", unsafe_allow_html=True)
@@ -1261,7 +1404,7 @@ elif view == "📝 Report Builder":
         else:
             st.info("No vaulted documents available for context selection.")
 
-        if st.button("🚀 Generate Standard Report", use_container_width=True, type="primary"):
+        if st.button("🚀 Generate Standard Report", width='stretch', type="primary"):
             # Combine context from selected documents
             context_text = ""
             if selected_doc_ids:
@@ -1310,7 +1453,7 @@ elif view == "📝 Report Builder":
             help="Mention specific companies, deals, or scenarios. Gemini will detect and analyze secondary companies automatically.",
         )
 
-        if st.button("🎯 Generate Strategic Report", use_container_width=True, type="primary"):
+        if st.button("🎯 Generate Strategic Report", width='stretch', type="primary"):
             if not user_prompt.strip():
                 st.warning("⚠️ Please enter a strategic query.")
             else:
@@ -1472,7 +1615,7 @@ Format your response in markdown. Do not speculate beyond the data provided.
         ]
         cols = st.columns(2)
         for i, q in enumerate(suggestions):
-            if cols[i % 2].button(q, key=f"sugg_{i}", use_container_width=True):
+            if cols[i % 2].button(q, key=f"sugg_{i}", width='stretch'):
                 st.session_state.chat_history.append({"role": "user", "content": q})
                 with st.spinner("Thinking..."):
                     messages = [{"role": "user", "content": system_context + "\n\nUser question: " + q}]
@@ -1486,7 +1629,7 @@ Format your response in markdown. Do not speculate beyond the data provided.
         with col_inp:
             user_input = st.text_input("", placeholder=f"Ask about {ticker}...", label_visibility="collapsed")
         with col_btn:
-            submitted = st.form_submit_button("Send →", use_container_width=True)
+            submitted = st.form_submit_button("Send →", width='stretch')
 
     if submitted and user_input.strip():
         st.session_state.chat_history.append({"role": "user", "content": user_input})
@@ -1499,6 +1642,6 @@ Format your response in markdown. Do not speculate beyond the data provided.
         st.rerun()
 
     if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat", use_container_width=False):
+        if st.button("🗑️ Clear Chat", width='content'):
             st.session_state.chat_history = []
             st.rerun()
