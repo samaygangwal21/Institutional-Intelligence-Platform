@@ -12,9 +12,11 @@ httpx>=0.28.1
 
 # Document Extraction (new)
 pymupdf4llm>=0.0.17
-youtube-transcript-api>=1.2.3
 beautifulsoup4>=4.12.0
 # crawl4ai>=0.2.77 (Requires C++ Build Tools for lxml on Python 3.14)
 
 # Cloud & Vaulting (new)
-azure-storage-blob>=12.19.0
+azure-storage-blob>=12.19.0
+
+# Infrastructure & Caching
+loguru>=0.7.2

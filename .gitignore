@@ -4,3 +4,8 @@ __pycache__/
 .env
 err.log
 .vscode/
+.cache/
+diagnostics/
+autonomous_reports/
+test_output.json
+governance_state.json
